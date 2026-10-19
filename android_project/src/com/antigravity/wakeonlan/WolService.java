@@ -13,8 +13,14 @@ import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.NetworkRequest;
+import android.net.TransportInfo;
+import android.net.wifi.WifiInfo;
 import android.os.Build;
 import android.os.IBinder;
+import android.os.PowerManager;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
 
 public class WolService extends Service {
     private static final String CHANNEL_ID = "AutoWakeServiceChannel";
@@ -54,49 +60,105 @@ public class WolService extends Service {
 
         networkCallback = new ConnectivityManager.NetworkCallback() {
             @Override
-            public void onAvailable(Network network) {
-                long now = System.currentTimeMillis();
-                if (now - lastWakeTime > 30000) {
-                    SharedPreferences prefs = getSharedPreferences("wol_prefs", MODE_PRIVATE);
-                    String targetSsid = prefs.getString("target_ssid", "").trim();
-
-                    if (!targetSsid.isEmpty()) {
-                        String currentSsid = WolHelper.getCurrentWifiSsid(WolService.this);
-                        if (!currentSsid.isEmpty() && !currentSsid.equalsIgnoreCase(targetSsid)) {
-                            updateNotification("Чужой Wi-Fi (" + currentSsid + "): ПК не включаем");
-                            return;
-                        }
-                    }
-
-                    lastWakeTime = now;
-                    triggerWake();
-                }
+            public void onAvailable(final Network network) {
+                handleNetworkAvailable(network);
             }
         };
 
         connectivityManager.registerNetworkCallback(request, networkCallback);
     }
 
-    private void triggerWake() {
+    private void handleNetworkAvailable(final Network network) {
+        long now = System.currentTimeMillis();
+        if (now - lastWakeTime < 10000) {
+            return;
+        }
+        lastWakeTime = now;
+
         new Thread(new Runnable() {
             @Override
             public void run() {
+                PowerManager.WakeLock wl = null;
                 try {
-                    SharedPreferences prefs = getSharedPreferences("wol_prefs", MODE_PRIVATE);
-                    String mac = prefs.getString("mac", WolHelper.DEFAULT_MAC);
-                    String ip = prefs.getString("ip", "");
-                    
-                    boolean ok = WolHelper.sendPacket(WolService.this, mac, ip, WolHelper.WOL_PORT);
-                    if (ok) {
-                        String currentSsid = WolHelper.getCurrentWifiSsid(WolService.this);
-                        String text = currentSsid.isEmpty() ? 
-                                "Wi-Fi подключен: Сигнал на ПК отправлен!" :
-                                "Домашний Wi-Fi (" + currentSsid + "): ПК включен!";
-                        updateNotification(text);
+                    PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+                    if (pm != null) {
+                        wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AutoWake:ServiceWakeLock");
+                        wl.acquire(15000);
                     }
-                } catch (Throwable ignored) {}
+
+                    // Settle time for DHCP and routing
+                    try { Thread.sleep(600); } catch (InterruptedException ignored) {}
+
+                    SharedPreferences prefs = getSharedPreferences("wol_prefs", MODE_PRIVATE);
+                    String targetSsid = prefs.getString("target_ssid", "").trim();
+                    String mac = prefs.getString("mac", "").trim();
+                    String ip = prefs.getString("ip", "").trim();
+
+                    if (mac.isEmpty()) {
+                        String err = "⚠️ Ошибка: укажите MAC-адрес ПК в AutoWake!";
+                        updateNotification(err);
+                        prefs.edit().putString("last_auto_wake", getTime() + " — " + err).apply();
+                        return;
+                    }
+
+                    String currentSsid = detectSsid(network);
+                    if (!targetSsid.isEmpty()) {
+                        if (!currentSsid.isEmpty() && !currentSsid.equalsIgnoreCase(targetSsid)) {
+                            String msg = "Чужой Wi-Fi (" + currentSsid + "): ПК не включаем";
+                            updateNotification(msg);
+                            prefs.edit().putString("last_auto_wake", getTime() + " — " + msg).apply();
+                            return;
+                        }
+                    }
+
+                    updateNotification("⚡ Wi-Fi подключен: отправка сигнала на ПК...");
+
+                    boolean ok = WolHelper.sendPacket(WolService.this, network, mac, ip, WolHelper.WOL_PORT);
+
+                    try { Thread.sleep(1200); } catch (InterruptedException ignored) {}
+                    WolHelper.sendPacket(WolService.this, network, mac, ip, WolHelper.WOL_PORT);
+
+                    String netLabel = currentSsid.isEmpty() ? "Wi-Fi" : currentSsid;
+                    String statusText;
+                    if (ok) {
+                        statusText = "⚡ ПК включен (" + netLabel + ") в " + getTime();
+                    } else {
+                        statusText = "⚠️ Сбой отправки сигнала на " + mac;
+                    }
+
+                    updateNotification(statusText);
+                    prefs.edit().putString("last_auto_wake", statusText).apply();
+
+                } catch (Throwable t) {
+                    t.printStackTrace();
+                } finally {
+                    if (wl != null && wl.isHeld()) {
+                        try { wl.release(); } catch (Throwable ignored) {}
+                    }
+                }
             }
         }).start();
+    }
+
+    private String detectSsid(Network network) {
+        if (Build.VERSION.SDK_INT >= 29 && connectivityManager != null && network != null) {
+            try {
+                NetworkCapabilities caps = connectivityManager.getNetworkCapabilities(network);
+                if (caps != null) {
+                    TransportInfo ti = caps.getTransportInfo();
+                    if (ti instanceof WifiInfo) {
+                        String s = ((WifiInfo) ti).getSSID();
+                        String clean = WolHelper.cleanSsid(s);
+                        if (!clean.isEmpty()) return clean;
+                    }
+                }
+            } catch (Throwable ignored) {}
+        }
+        return WolHelper.getCurrentWifiSsid(this);
+    }
+
+    private String getTime() {
+        return new SimpleDateFormat("HH:mm", Locale.getDefault()).format(new Date());
     }
 
     private void updateNotification(String text) {

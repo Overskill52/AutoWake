@@ -90,8 +90,8 @@ def create_project_files():
     manifest = """<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.antigravity.wakeonlan"
-    android:versionCode="6"
-    android:versionName="1.5">
+    android:versionCode="7"
+    android:versionName="1.6">
 
     <uses-sdk
         android:minSdkVersion="26"
@@ -107,6 +107,8 @@ def create_project_files():
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:label="@string/app_name"
@@ -487,6 +489,26 @@ def create_project_files():
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content" />
             </LinearLayout>
+
+            <TextView
+                android:id="@+id/tvLastAutoWake"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Последний сигнал: не зафиксирован"
+                android:textSize="12sp"
+                android:textColor="#00E5FF"
+                android:layout_marginTop="8dp" />
+
+            <Button
+                android:id="@+id/btnBatteryOpt"
+                android:layout_width="match_parent"
+                android:layout_height="38dp"
+                android:background="@drawable/btn_small_bg"
+                android:text="🔋 Разрешить работу в фоне (без засыпания)"
+                android:textSize="11sp"
+                android:textColor="#FFFFFF"
+                android:visibility="gone"
+                android:layout_marginTop="8dp" />
         </LinearLayout>
 
         <!-- Settings Card -->
@@ -605,6 +627,7 @@ def create_project_files():
     wol_helper = """package com.antigravity.wakeonlan;
 
 import android.content.Context;
+import android.net.Network;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import java.net.DatagramPacket;
@@ -650,19 +673,24 @@ public class WolHelper {
         return new ArrayList<>(addresses);
     }
 
+    public static String cleanSsid(String ssid) {
+        if (ssid == null) return "";
+        if (ssid.startsWith("\\\"") && ssid.endsWith("\\\"") && ssid.length() >= 2) {
+            ssid = ssid.substring(1, ssid.length() - 1);
+        }
+        if (ssid.equals("<unknown ssid>")) {
+            return "";
+        }
+        return ssid.trim();
+    }
+
     public static String getCurrentWifiSsid(Context context) {
         try {
             WifiManager wifiManager = (WifiManager) context.getApplicationContext().getSystemService(Context.WIFI_SERVICE);
             if (wifiManager != null) {
                 WifiInfo info = wifiManager.getConnectionInfo();
                 if (info != null && info.getSSID() != null) {
-                    String ssid = info.getSSID();
-                    if (ssid.startsWith("\\\"") && ssid.endsWith("\\\"") && ssid.length() >= 2) {
-                        ssid = ssid.substring(1, ssid.length() - 1);
-                    }
-                    if (!ssid.equals("<unknown ssid>")) {
-                        return ssid;
-                    }
+                    return cleanSsid(info.getSSID());
                 }
             }
         } catch (Exception e) {
@@ -671,7 +699,7 @@ public class WolHelper {
         return "";
     }
 
-    public static boolean sendPacket(Context context, String macStr, String manualIp, int port) {
+    public static boolean sendPacket(Context context, Network network, String macStr, String manualIp, int port) {
         try {
             String cleanMac = macStr.replaceAll("[:\\\\-]", "").trim();
             if (cleanMac.length() != 12) {
@@ -696,25 +724,62 @@ public class WolHelper {
                 targets.add(manualIp.trim());
             }
 
+            WifiManager.MulticastLock multicastLock = null;
+            try {
+                WifiManager wifi = (WifiManager) context.getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+                if (wifi != null) {
+                    multicastLock = wifi.createMulticastLock("AutoWakeMulticast");
+                    multicastLock.acquire();
+                }
+            } catch (Throwable ignored) {}
+
             boolean anySuccess = false;
-            for (String ip : targets) {
-                try {
-                    InetAddress address = InetAddress.getByName(ip);
-                    DatagramPacket packet = new DatagramPacket(bytes, bytes.length, address, port);
-                    DatagramSocket socket = new DatagramSocket();
-                    socket.setBroadcast(true);
-                    socket.send(packet);
-                    socket.close();
-                    anySuccess = true;
-                } catch (Exception e) {
-                    e.printStackTrace();
+            try {
+                for (int attempt = 0; attempt < 3; attempt++) {
+                    for (String ip : targets) {
+                        try {
+                            InetAddress address = InetAddress.getByName(ip);
+                            DatagramPacket packet = new DatagramPacket(bytes, bytes.length, address, port);
+                            
+                            if (network != null) {
+                                try {
+                                    DatagramSocket netSock = new DatagramSocket();
+                                    network.bindSocket(netSock);
+                                    netSock.setBroadcast(true);
+                                    netSock.send(packet);
+                                    netSock.close();
+                                    anySuccess = true;
+                                } catch (Throwable ignored) {}
+                            }
+
+                            DatagramSocket socket = new DatagramSocket();
+                            socket.setBroadcast(true);
+                            socket.send(packet);
+                            socket.close();
+                            anySuccess = true;
+                        } catch (Exception e) {
+                            e.printStackTrace();
+                        }
+                    }
+                    if (attempt < 2) {
+                        try { Thread.sleep(200); } catch (InterruptedException ignored) {}
+                    }
+                }
+            } finally {
+                if (multicastLock != null && multicastLock.isHeld()) {
+                    try { multicastLock.release(); } catch (Throwable ignored) {}
                 }
             }
+
             return anySuccess;
         } catch (Exception e) {
             e.printStackTrace();
             return false;
         }
+    }
+
+    public static boolean sendPacket(Context context, String macStr, String manualIp, int port) {
+        return sendPacket(context, null, macStr, manualIp, port);
     }
 
     public static boolean sendAgentCommand(String command, String manualIp) {
@@ -791,8 +856,14 @@ import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.NetworkRequest;
+import android.net.TransportInfo;
+import android.net.wifi.WifiInfo;
 import android.os.Build;
 import android.os.IBinder;
+import android.os.PowerManager;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
 
 public class WolService extends Service {
     private static final String CHANNEL_ID = "AutoWakeServiceChannel";
@@ -832,49 +903,105 @@ public class WolService extends Service {
 
         networkCallback = new ConnectivityManager.NetworkCallback() {
             @Override
-            public void onAvailable(Network network) {
-                long now = System.currentTimeMillis();
-                if (now - lastWakeTime > 30000) {
-                    SharedPreferences prefs = getSharedPreferences("wol_prefs", MODE_PRIVATE);
-                    String targetSsid = prefs.getString("target_ssid", "").trim();
-
-                    if (!targetSsid.isEmpty()) {
-                        String currentSsid = WolHelper.getCurrentWifiSsid(WolService.this);
-                        if (!currentSsid.isEmpty() && !currentSsid.equalsIgnoreCase(targetSsid)) {
-                            updateNotification("Чужой Wi-Fi (" + currentSsid + "): ПК не включаем");
-                            return;
-                        }
-                    }
-
-                    lastWakeTime = now;
-                    triggerWake();
-                }
+            public void onAvailable(final Network network) {
+                handleNetworkAvailable(network);
             }
         };
 
         connectivityManager.registerNetworkCallback(request, networkCallback);
     }
 
-    private void triggerWake() {
+    private void handleNetworkAvailable(final Network network) {
+        long now = System.currentTimeMillis();
+        if (now - lastWakeTime < 10000) {
+            return;
+        }
+        lastWakeTime = now;
+
         new Thread(new Runnable() {
             @Override
             public void run() {
+                PowerManager.WakeLock wl = null;
                 try {
-                    SharedPreferences prefs = getSharedPreferences("wol_prefs", MODE_PRIVATE);
-                    String mac = prefs.getString("mac", WolHelper.DEFAULT_MAC);
-                    String ip = prefs.getString("ip", "");
-                    
-                    boolean ok = WolHelper.sendPacket(WolService.this, mac, ip, WolHelper.WOL_PORT);
-                    if (ok) {
-                        String currentSsid = WolHelper.getCurrentWifiSsid(WolService.this);
-                        String text = currentSsid.isEmpty() ? 
-                                "Wi-Fi подключен: Сигнал на ПК отправлен!" :
-                                "Домашний Wi-Fi (" + currentSsid + "): ПК включен!";
-                        updateNotification(text);
+                    PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+                    if (pm != null) {
+                        wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AutoWake:ServiceWakeLock");
+                        wl.acquire(15000);
                     }
-                } catch (Throwable ignored) {}
+
+                    // Settle time for DHCP and routing
+                    try { Thread.sleep(600); } catch (InterruptedException ignored) {}
+
+                    SharedPreferences prefs = getSharedPreferences("wol_prefs", MODE_PRIVATE);
+                    String targetSsid = prefs.getString("target_ssid", "").trim();
+                    String mac = prefs.getString("mac", "").trim();
+                    String ip = prefs.getString("ip", "").trim();
+
+                    if (mac.isEmpty()) {
+                        String err = "⚠️ Ошибка: укажите MAC-адрес ПК в AutoWake!";
+                        updateNotification(err);
+                        prefs.edit().putString("last_auto_wake", getTime() + " — " + err).apply();
+                        return;
+                    }
+
+                    String currentSsid = detectSsid(network);
+                    if (!targetSsid.isEmpty()) {
+                        if (!currentSsid.isEmpty() && !currentSsid.equalsIgnoreCase(targetSsid)) {
+                            String msg = "Чужой Wi-Fi (" + currentSsid + "): ПК не включаем";
+                            updateNotification(msg);
+                            prefs.edit().putString("last_auto_wake", getTime() + " — " + msg).apply();
+                            return;
+                        }
+                    }
+
+                    updateNotification("⚡ Wi-Fi подключен: отправка сигнала на ПК...");
+
+                    boolean ok = WolHelper.sendPacket(WolService.this, network, mac, ip, WolHelper.WOL_PORT);
+
+                    try { Thread.sleep(1200); } catch (InterruptedException ignored) {}
+                    WolHelper.sendPacket(WolService.this, network, mac, ip, WolHelper.WOL_PORT);
+
+                    String netLabel = currentSsid.isEmpty() ? "Wi-Fi" : currentSsid;
+                    String statusText;
+                    if (ok) {
+                        statusText = "⚡ ПК включен (" + netLabel + ") в " + getTime();
+                    } else {
+                        statusText = "⚠️ Сбой отправки сигнала на " + mac;
+                    }
+
+                    updateNotification(statusText);
+                    prefs.edit().putString("last_auto_wake", statusText).apply();
+
+                } catch (Throwable t) {
+                    t.printStackTrace();
+                } finally {
+                    if (wl != null && wl.isHeld()) {
+                        try { wl.release(); } catch (Throwable ignored) {}
+                    }
+                }
             }
         }).start();
+    }
+
+    private String detectSsid(Network network) {
+        if (Build.VERSION.SDK_INT >= 29 && connectivityManager != null && network != null) {
+            try {
+                NetworkCapabilities caps = connectivityManager.getNetworkCapabilities(network);
+                if (caps != null) {
+                    TransportInfo ti = caps.getTransportInfo();
+                    if (ti instanceof WifiInfo) {
+                        String s = ((WifiInfo) ti).getSSID();
+                        String clean = WolHelper.cleanSsid(s);
+                        if (!clean.isEmpty()) return clean;
+                    }
+                }
+            } catch (Throwable ignored) {}
+        }
+        return WolHelper.getCurrentWifiSsid(this);
+    }
+
+    private String getTime() {
+        return new SimpleDateFormat("HH:mm", Locale.getDefault()).format(new Date());
     }
 
     private void updateNotification(String text) {
@@ -979,6 +1106,7 @@ public class BootReceiver extends BroadcastReceiver {
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -987,6 +1115,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.view.View;
 import android.widget.Button;
 import android.widget.CompoundButton;
@@ -998,7 +1127,8 @@ import java.util.List;
 
 public class MainActivity extends Activity {
     private EditText etMac, etSsid, etIp;
-    private TextView tvStatus, tvNetworkInfo, tvPcStatus;
+    private TextView tvStatus, tvNetworkInfo, tvPcStatus, tvLastAutoWake;
+    private Button btnBatteryOpt;
     private Switch swAutoWake;
     private SharedPreferences prefs;
 
@@ -1021,6 +1151,8 @@ public class MainActivity extends Activity {
         tvStatus = findViewById(R.id.tvStatus);
         tvNetworkInfo = findViewById(R.id.tvNetworkInfo);
         tvPcStatus = findViewById(R.id.tvPcStatus);
+        tvLastAutoWake = findViewById(R.id.tvLastAutoWake);
+        btnBatteryOpt = findViewById(R.id.btnBatteryOpt);
         swAutoWake = findViewById(R.id.swAutoWake);
 
         Button btnWake = findViewById(R.id.btnWake);
@@ -1081,6 +1213,15 @@ public class MainActivity extends Activity {
                 saveSettings();
                 refreshNetworkInfo();
                 checkPcOnline();
+                if (swAutoWake.isChecked()) {
+                    Intent serviceIntent = new Intent(MainActivity.this, WolService.class);
+                    stopService(serviceIntent);
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        startForegroundService(serviceIntent);
+                    } else {
+                        startService(serviceIntent);
+                    }
+                }
                 Toast.makeText(MainActivity.this, "Настройки сохранены!", Toast.LENGTH_SHORT).show();
             }
         });
@@ -1088,6 +1229,16 @@ public class MainActivity extends Activity {
         swAutoWake.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
             @Override
             public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+                if (isChecked) {
+                    String mac = prefs.getString("mac", "").trim();
+                    if (mac.replace(":", "").replace("-", "").length() != 12) {
+                        swAutoWake.setChecked(false);
+                        Toast.makeText(MainActivity.this, "⚠️ Сначала укажите MAC-адрес ПК и сохраните!", Toast.LENGTH_LONG).show();
+                        etMac.requestFocus();
+                        return;
+                    }
+                }
+
                 prefs.edit().putBoolean("auto_wake", isChecked).apply();
                 Intent serviceIntent = new Intent(MainActivity.this, WolService.class);
                 try {
@@ -1115,6 +1266,30 @@ public class MainActivity extends Activity {
         super.onResume();
         refreshNetworkInfo();
         checkPcOnline();
+
+        String lastWake = prefs.getString("last_auto_wake", "Пока не зафиксировано");
+        tvLastAutoWake.setText("Последний сигнал: " + lastWake);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            if (pm != null && !pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                btnBatteryOpt.setVisibility(View.VISIBLE);
+                btnBatteryOpt.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        try {
+                            Intent intent = new Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                            intent.setData(android.net.Uri.parse("package:" + getPackageName()));
+                            startActivity(intent);
+                        } catch (Throwable t) {
+                            Toast.makeText(MainActivity.this, "Отключите экономию батареи в настройках приложения", Toast.LENGTH_LONG).show();
+                        }
+                    }
+                });
+            } else {
+                btnBatteryOpt.setVisibility(View.GONE);
+            }
+        }
     }
 
     private void checkPcOnline() {

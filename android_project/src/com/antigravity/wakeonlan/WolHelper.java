@@ -1,6 +1,7 @@
 package com.antigravity.wakeonlan;
 
 import android.content.Context;
+import android.net.Network;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import java.net.DatagramPacket;
@@ -46,19 +47,24 @@ public class WolHelper {
         return new ArrayList<>(addresses);
     }
 
+    public static String cleanSsid(String ssid) {
+        if (ssid == null) return "";
+        if (ssid.startsWith("\"") && ssid.endsWith("\"") && ssid.length() >= 2) {
+            ssid = ssid.substring(1, ssid.length() - 1);
+        }
+        if (ssid.equals("<unknown ssid>")) {
+            return "";
+        }
+        return ssid.trim();
+    }
+
     public static String getCurrentWifiSsid(Context context) {
         try {
             WifiManager wifiManager = (WifiManager) context.getApplicationContext().getSystemService(Context.WIFI_SERVICE);
             if (wifiManager != null) {
                 WifiInfo info = wifiManager.getConnectionInfo();
                 if (info != null && info.getSSID() != null) {
-                    String ssid = info.getSSID();
-                    if (ssid.startsWith("\"") && ssid.endsWith("\"") && ssid.length() >= 2) {
-                        ssid = ssid.substring(1, ssid.length() - 1);
-                    }
-                    if (!ssid.equals("<unknown ssid>")) {
-                        return ssid;
-                    }
+                    return cleanSsid(info.getSSID());
                 }
             }
         } catch (Exception e) {
@@ -67,7 +73,7 @@ public class WolHelper {
         return "";
     }
 
-    public static boolean sendPacket(Context context, String macStr, String manualIp, int port) {
+    public static boolean sendPacket(Context context, Network network, String macStr, String manualIp, int port) {
         try {
             String cleanMac = macStr.replaceAll("[:\\-]", "").trim();
             if (cleanMac.length() != 12) {
@@ -92,25 +98,62 @@ public class WolHelper {
                 targets.add(manualIp.trim());
             }
 
+            WifiManager.MulticastLock multicastLock = null;
+            try {
+                WifiManager wifi = (WifiManager) context.getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+                if (wifi != null) {
+                    multicastLock = wifi.createMulticastLock("AutoWakeMulticast");
+                    multicastLock.acquire();
+                }
+            } catch (Throwable ignored) {}
+
             boolean anySuccess = false;
-            for (String ip : targets) {
-                try {
-                    InetAddress address = InetAddress.getByName(ip);
-                    DatagramPacket packet = new DatagramPacket(bytes, bytes.length, address, port);
-                    DatagramSocket socket = new DatagramSocket();
-                    socket.setBroadcast(true);
-                    socket.send(packet);
-                    socket.close();
-                    anySuccess = true;
-                } catch (Exception e) {
-                    e.printStackTrace();
+            try {
+                for (int attempt = 0; attempt < 3; attempt++) {
+                    for (String ip : targets) {
+                        try {
+                            InetAddress address = InetAddress.getByName(ip);
+                            DatagramPacket packet = new DatagramPacket(bytes, bytes.length, address, port);
+                            
+                            if (network != null) {
+                                try {
+                                    DatagramSocket netSock = new DatagramSocket();
+                                    network.bindSocket(netSock);
+                                    netSock.setBroadcast(true);
+                                    netSock.send(packet);
+                                    netSock.close();
+                                    anySuccess = true;
+                                } catch (Throwable ignored) {}
+                            }
+
+                            DatagramSocket socket = new DatagramSocket();
+                            socket.setBroadcast(true);
+                            socket.send(packet);
+                            socket.close();
+                            anySuccess = true;
+                        } catch (Exception e) {
+                            e.printStackTrace();
+                        }
+                    }
+                    if (attempt < 2) {
+                        try { Thread.sleep(200); } catch (InterruptedException ignored) {}
+                    }
+                }
+            } finally {
+                if (multicastLock != null && multicastLock.isHeld()) {
+                    try { multicastLock.release(); } catch (Throwable ignored) {}
                 }
             }
+
             return anySuccess;
         } catch (Exception e) {
             e.printStackTrace();
             return false;
         }
+    }
+
+    public static boolean sendPacket(Context context, String macStr, String manualIp, int port) {
+        return sendPacket(context, null, macStr, manualIp, port);
     }
 
     public static boolean sendAgentCommand(String command, String manualIp) {

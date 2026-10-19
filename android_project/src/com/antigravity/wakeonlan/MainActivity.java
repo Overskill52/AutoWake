@@ -2,6 +2,7 @@ package com.antigravity.wakeonlan;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -10,6 +11,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.view.View;
 import android.widget.Button;
 import android.widget.CompoundButton;
@@ -21,7 +23,8 @@ import java.util.List;
 
 public class MainActivity extends Activity {
     private EditText etMac, etSsid, etIp;
-    private TextView tvStatus, tvNetworkInfo, tvPcStatus;
+    private TextView tvStatus, tvNetworkInfo, tvPcStatus, tvLastAutoWake;
+    private Button btnBatteryOpt;
     private Switch swAutoWake;
     private SharedPreferences prefs;
 
@@ -44,6 +47,8 @@ public class MainActivity extends Activity {
         tvStatus = findViewById(R.id.tvStatus);
         tvNetworkInfo = findViewById(R.id.tvNetworkInfo);
         tvPcStatus = findViewById(R.id.tvPcStatus);
+        tvLastAutoWake = findViewById(R.id.tvLastAutoWake);
+        btnBatteryOpt = findViewById(R.id.btnBatteryOpt);
         swAutoWake = findViewById(R.id.swAutoWake);
 
         Button btnWake = findViewById(R.id.btnWake);
@@ -104,6 +109,15 @@ public class MainActivity extends Activity {
                 saveSettings();
                 refreshNetworkInfo();
                 checkPcOnline();
+                if (swAutoWake.isChecked()) {
+                    Intent serviceIntent = new Intent(MainActivity.this, WolService.class);
+                    stopService(serviceIntent);
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        startForegroundService(serviceIntent);
+                    } else {
+                        startService(serviceIntent);
+                    }
+                }
                 Toast.makeText(MainActivity.this, "Настройки сохранены!", Toast.LENGTH_SHORT).show();
             }
         });
@@ -111,6 +125,16 @@ public class MainActivity extends Activity {
         swAutoWake.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
             @Override
             public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+                if (isChecked) {
+                    String mac = prefs.getString("mac", "").trim();
+                    if (mac.replace(":", "").replace("-", "").length() != 12) {
+                        swAutoWake.setChecked(false);
+                        Toast.makeText(MainActivity.this, "⚠️ Сначала укажите MAC-адрес ПК и сохраните!", Toast.LENGTH_LONG).show();
+                        etMac.requestFocus();
+                        return;
+                    }
+                }
+
                 prefs.edit().putBoolean("auto_wake", isChecked).apply();
                 Intent serviceIntent = new Intent(MainActivity.this, WolService.class);
                 try {
@@ -138,6 +162,30 @@ public class MainActivity extends Activity {
         super.onResume();
         refreshNetworkInfo();
         checkPcOnline();
+
+        String lastWake = prefs.getString("last_auto_wake", "Пока не зафиксировано");
+        tvLastAutoWake.setText("Последний сигнал: " + lastWake);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            if (pm != null && !pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                btnBatteryOpt.setVisibility(View.VISIBLE);
+                btnBatteryOpt.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        try {
+                            Intent intent = new Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                            intent.setData(android.net.Uri.parse("package:" + getPackageName()));
+                            startActivity(intent);
+                        } catch (Throwable t) {
+                            Toast.makeText(MainActivity.this, "Отключите экономию батареи в настройках приложения", Toast.LENGTH_LONG).show();
+                        }
+                    }
+                });
+            } else {
+                btnBatteryOpt.setVisibility(View.GONE);
+            }
+        }
     }
 
     private void checkPcOnline() {

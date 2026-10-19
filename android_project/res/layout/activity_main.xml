@@ -194,6 +194,26 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content" />
             </LinearLayout>
+
+            <TextView
+                android:id="@+id/tvLastAutoWake"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Последний сигнал: не зафиксирован"
+                android:textSize="12sp"
+                android:textColor="#00E5FF"
+                android:layout_marginTop="8dp" />
+
+            <Button
+                android:id="@+id/btnBatteryOpt"
+                android:layout_width="match_parent"
+                android:layout_height="38dp"
+                android:background="@drawable/btn_small_bg"
+                android:text="🔋 Разрешить работу в фоне (без засыпания)"
+                android:textSize="11sp"
+                android:textColor="#FFFFFF"
+                android:visibility="gone"
+                android:layout_marginTop="8dp" />
         </LinearLayout>
 
         <!-- Settings Card -->
