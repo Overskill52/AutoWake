@@ -1,0 +1,307 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0F111A"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:gravity="center_horizontal"
+        android:padding="20dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="AutoWake &amp; Power PC"
+            android:textSize="24sp"
+            android:textStyle="bold"
+            android:textColor="#FFFFFF"
+            android:layout_marginTop="10dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Управление питанием компьютера"
+            android:textSize="13sp"
+            android:textColor="#8F9CAE"
+            android:layout_marginTop="3dp" />
+
+        <!-- PC Status Banner -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="@drawable/card_bg"
+            android:padding="14dp"
+            android:layout_marginTop="18dp">
+
+            <TextView
+                android:id="@+id/tvPcStatus"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="🔄 Проверка статуса ПК..."
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:textColor="#00E5FF" />
+
+            <Button
+                android:id="@+id/btnCheckStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:text="🔄 Проверить"
+                android:textSize="11sp"
+                android:textColor="#FFFFFF"
+                android:background="@drawable/btn_small_bg"
+                android:paddingLeft="10dp"
+                android:paddingRight="10dp" />
+        </LinearLayout>
+
+        <!-- Main Power Buttons -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/card_bg"
+            android:padding="16dp"
+            android:layout_marginTop="14dp">
+
+            <Button
+                android:id="@+id/btnWake"
+                android:layout_width="match_parent"
+                android:layout_height="56dp"
+                android:background="@drawable/btn_wake_bg"
+                android:text="⚡ ВКЛЮЧИТЬ ПК"
+                android:textSize="17sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="12dp">
+
+                <Button
+                    android:id="@+id/btnShutdown"
+                    android:layout_width="0dp"
+                    android:layout_height="52dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/btn_shutdown_bg"
+                    android:text="🛑 ВЫКЛЮЧИТЬ"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:textColor="#FFFFFF" />
+
+                <View
+                    android:layout_width="10dp"
+                    android:layout_height="match_parent" />
+
+                <Button
+                    android:id="@+id/btnSleep"
+                    android:layout_width="0dp"
+                    android:layout_height="52dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/btn_sleep_bg"
+                    android:text="💤 В СОН"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:textColor="#FFFFFF" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/tvStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center_horizontal"
+                android:text="Готов к отправке команд"
+                android:textSize="13sp"
+                android:textColor="#8F9CAE"
+                android:layout_marginTop="12dp" />
+        </LinearLayout>
+
+        <!-- Network Info Card -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/card_bg"
+            android:padding="14dp"
+            android:layout_marginTop="14dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="📡 Текущая сеть:"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:textColor="#00E5FF" />
+
+            <TextView
+                android:id="@+id/tvNetworkInfo"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Определение сети..."
+                android:textSize="13sp"
+                android:textColor="#FFFFFF"
+                android:layout_marginTop="3dp" />
+        </LinearLayout>
+
+        <!-- Auto-wake Switch Card -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/card_bg"
+            android:padding="14dp"
+            android:layout_marginTop="12dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Авто-включение при Wi-Fi"
+                        android:textSize="15sp"
+                        android:textStyle="bold"
+                        android:textColor="#FFFFFF" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Будить ПК при подключении к домашней сети"
+                        android:textSize="12sp"
+                        android:textColor="#8F9CAE"
+                        android:layout_marginTop="2dp" />
+                </LinearLayout>
+
+                <Switch
+                    android:id="@+id/swAutoWake"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Settings Card -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/card_bg"
+            android:padding="16dp"
+            android:layout_marginTop="12dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Параметры и фильтрация"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF"
+                android:layout_marginBottom="10dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="MAC-адрес ПК"
+                android:textSize="12sp"
+                android:textColor="#8F9CAE" />
+
+            <EditText
+                android:id="@+id/etMac"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="AA:BB:CC:DD:EE:FF"
+                android:textColorHint="#5A6578"
+                android:textColor="#FFFFFF"
+                android:textSize="14sp"
+                android:background="#12141E"
+                android:padding="10dp"
+                android:layout_marginTop="4dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Домашний Wi-Fi (SSID)"
+                android:textSize="12sp"
+                android:textColor="#8F9CAE"
+                android:layout_marginTop="10dp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginTop="4dp">
+
+                <EditText
+                    android:id="@+id/etSsid"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:hint="Имя сети (или пусто для всех)"
+                    android:textColorHint="#5A6578"
+                    android:textColor="#FFFFFF"
+                    android:textSize="14sp"
+                    android:background="#12141E"
+                    android:padding="10dp" />
+
+                <Button
+                    android:id="@+id/btnDetectWifi"
+                    android:layout_width="wrap_content"
+                    android:layout_height="40dp"
+                    android:text="🔍 Текущий"
+                    android:textSize="11sp"
+                    android:textColor="#00E5FF"
+                    android:background="@drawable/btn_small_bg"
+                    android:paddingLeft="10dp"
+                    android:paddingRight="10dp"
+                    android:layout_marginLeft="8dp" />
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="IP адрес ПК (для команд и Broadcast)"
+                android:textSize="12sp"
+                android:textColor="#8F9CAE"
+                android:layout_marginTop="10dp" />
+
+            <EditText
+                android:id="@+id/etIp"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="IP ПК (например: 192.168.0.100)"
+                android:textColorHint="#5A6578"
+                android:textColor="#FFFFFF"
+                android:textSize="14sp"
+                android:background="#12141E"
+                android:padding="10dp"
+                android:layout_marginTop="4dp" />
+
+            <Button
+                android:id="@+id/btnSave"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Сохранить настройки"
+                android:textColor="#FFFFFF"
+                android:background="#262B3F"
+                android:layout_marginTop="16dp" />
+        </LinearLayout>
+
+    </LinearLayout>
+</ScrollView>

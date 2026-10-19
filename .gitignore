@@ -1,0 +1,25 @@
+# Temporary logs and cache
+*.log
+pc_agent.log
+__pycache__/
+*.pyc
+*.pyo
+
+# Android build intermediates
+android_project/bin/
+android_project/gen/
+android_project/classes.dex
+android_project/*.apk
+android_project/*.idsig
+android_project/*.zip
+*.idsig
+
+# Debug keystores
+*.keystore
+
+# Operating System files
+Thumbs.db
+Desktop.ini
+.DS_Store
+.idea/
+.vscode/

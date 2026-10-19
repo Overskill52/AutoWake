@@ -1,0 +1,1414 @@
+import os
+import subprocess
+import shutil
+import struct
+import zlib
+
+SDK_DIR = os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT")
+if not SDK_DIR:
+    user_home = os.path.expanduser("~")
+    for candidate in [
+        os.path.join(user_home, "AppData", "Local", "Android", "Sdk"),
+        r"C:\Android\Sdk",
+        r"C:\Program Files (x86)\Android\android-sdk"
+    ]:
+        if os.path.exists(candidate):
+            SDK_DIR = candidate
+            break
+
+build_tools_root = os.path.join(SDK_DIR, "build-tools") if SDK_DIR else ""
+if os.path.exists(build_tools_root):
+    versions = sorted(os.listdir(build_tools_root))
+    BUILD_TOOLS_DIR = os.path.join(build_tools_root, versions[-1]) if versions else ""
+else:
+    BUILD_TOOLS_DIR = ""
+
+platforms_root = os.path.join(SDK_DIR, "platforms") if SDK_DIR else ""
+if os.path.exists(platforms_root):
+    platforms = sorted(os.listdir(platforms_root))
+    PLATFORM_DIR = os.path.join(platforms_root, platforms[-1]) if platforms else ""
+else:
+    PLATFORM_DIR = ""
+
+ANDROID_JAR = os.path.join(PLATFORM_DIR, "android.jar") if PLATFORM_DIR else ""
+
+AAPT2 = os.path.join(BUILD_TOOLS_DIR, "aapt2.exe") if BUILD_TOOLS_DIR else "aapt2"
+D8 = os.path.join(BUILD_TOOLS_DIR, "d8.bat") if BUILD_TOOLS_DIR else "d8"
+ZIPALIGN = os.path.join(BUILD_TOOLS_DIR, "zipalign.exe") if BUILD_TOOLS_DIR else "zipalign"
+APKSIGNER = os.path.join(BUILD_TOOLS_DIR, "apksigner.bat") if BUILD_TOOLS_DIR else "apksigner"
+
+JDK_DIR = os.environ.get("JAVA_HOME")
+if not JDK_DIR:
+    for candidate in [
+        r"C:\Program Files\Microsoft\jdk-17.0.10.7-hotspot",
+        r"C:\Program Files\Java\jdk-17",
+        r"C:\Program Files\Eclipse Adoptium\jdk-17",
+        r"C:\Program Files\Android\Android Studio\jbr"
+    ]:
+        if os.path.exists(candidate):
+            JDK_DIR = candidate
+            break
+
+if JDK_DIR:
+    os.environ["JAVA_HOME"] = JDK_DIR
+    os.environ["PATH"] = os.path.join(JDK_DIR, "bin") + os.pathsep + os.environ["PATH"]
+
+PROJ_DIR = os.path.abspath("android_project")
+SRC_DIR = os.path.join(PROJ_DIR, "src", "com", "antigravity", "wakeonlan")
+RES_DIR = os.path.join(PROJ_DIR, "res")
+BIN_DIR = os.path.join(PROJ_DIR, "bin")
+GEN_DIR = os.path.join(PROJ_DIR, "gen")
+
+def run(cmd, shell=False):
+    print(f"RUN: {cmd if isinstance(cmd, str) else ' '.join(cmd)}")
+    res = subprocess.run(cmd, shell=shell, capture_output=True, text=True)
+    if res.returncode != 0:
+        print(f"STDOUT: {res.stdout}")
+        print(f"STDERR: {res.stderr}")
+        raise RuntimeError(f"Command failed with code {res.returncode}")
+    return res.stdout
+
+def make_png(w, h, color):
+    raw = b''.join([b'\x00' + color * w for _ in range(h)])
+    def chunk(tag, data):
+        return struct.pack('>I', len(data)) + tag + data + struct.pack('>I', zlib.crc32(tag + data))
+    png = b'\x89PNG\r\n\x1a\n'
+    png += chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0))
+    png += chunk(b'IDAT', zlib.compress(raw))
+    png += chunk(b'IEND', b'')
+    return png
+
+def create_project_files():
+    os.makedirs(SRC_DIR, exist_ok=True)
+    os.makedirs(os.path.join(RES_DIR, "values"), exist_ok=True)
+    os.makedirs(os.path.join(RES_DIR, "layout"), exist_ok=True)
+    os.makedirs(os.path.join(RES_DIR, "drawable"), exist_ok=True)
+    os.makedirs(BIN_DIR, exist_ok=True)
+    os.makedirs(GEN_DIR, exist_ok=True)
+
+    # 1. AndroidManifest.xml
+    manifest = """<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.antigravity.wakeonlan"
+    android:versionCode="6"
+    android:versionName="1.5">
+
+    <uses-sdk
+        android:minSdkVersion="26"
+        android:targetSdkVersion="34" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <application
+        android:label="@string/app_name"
+        android:icon="@drawable/ic_launcher"
+        android:roundIcon="@drawable/ic_launcher"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".WolService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+
+        <receiver
+            android:name=".BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+</manifest>"""
+    with open(os.path.join(PROJ_DIR, "AndroidManifest.xml"), "w", encoding="utf-8") as f:
+        f.write(manifest)
+
+    # 2. strings.xml
+    strings = """<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AutoWake</string>
+</resources>"""
+    with open(os.path.join(RES_DIR, "values", "strings.xml"), "w", encoding="utf-8") as f:
+        f.write(strings)
+
+    # 3. colors.xml
+    colors = """<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg_dark">#0F111A</color>
+    <color name="card_dark">#1A1D2B</color>
+    <color name="cyan_glow">#00E5FF</color>
+    <color name="purple_accent">#7C4DFF</color>
+    <color name="text_white">#FFFFFF</color>
+    <color name="text_gray">#8F9CAE</color>
+</resources>"""
+    with open(os.path.join(RES_DIR, "values", "colors.xml"), "w", encoding="utf-8") as f:
+        f.write(colors)
+
+    # 4. Adaptive and Themed Icon Drawables
+    ic_launcher = """<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_monochrome" />
+</adaptive-icon>"""
+    with open(os.path.join(RES_DIR, "drawable", "ic_launcher.xml"), "w", encoding="utf-8") as f:
+        f.write(ic_launcher)
+
+    ic_launcher_bg = """<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <gradient
+        android:angle="135"
+        android:startColor="#1E2333"
+        android:endColor="#0B0D14"
+        android:type="linear" />
+</shape>"""
+    with open(os.path.join(RES_DIR, "drawable", "ic_launcher_background.xml"), "w", encoding="utf-8") as f:
+        f.write(ic_launcher_bg)
+
+    ic_launcher_fg = """<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M 68.14,37.15 A 22,22 0 1,1 39.86,37.15"
+        android:strokeColor="#00E5FF"
+        android:strokeWidth="6.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M 54,20 L 54,52"
+        android:strokeColor="#00E5FF"
+        android:strokeWidth="6.5"
+        android:strokeLineCap="round" />
+</vector>"""
+    with open(os.path.join(RES_DIR, "drawable", "ic_launcher_foreground.xml"), "w", encoding="utf-8") as f:
+        f.write(ic_launcher_fg)
+
+    ic_launcher_mono = """<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M 68.14,37.15 A 22,22 0 1,1 39.86,37.15"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="6.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M 54,20 L 54,52"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="6.5"
+        android:strokeLineCap="round" />
+</vector>"""
+    with open(os.path.join(RES_DIR, "drawable", "ic_launcher_monochrome.xml"), "w", encoding="utf-8") as f:
+        f.write(ic_launcher_mono)
+
+    with open(os.path.join(RES_DIR, "drawable", "ic_stat_wol.png"), "wb") as f:
+        f.write(make_png(48, 48, b'\xff\xff\xff'))
+
+    btn_wake_bg = """<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <gradient
+        android:angle="45"
+        android:startColor="#0072FF"
+        android:endColor="#00E5FF"
+        android:type="linear" />
+    <corners android:radius="14dp" />
+</shape>"""
+    with open(os.path.join(RES_DIR, "drawable", "btn_wake_bg.xml"), "w", encoding="utf-8") as f:
+        f.write(btn_wake_bg)
+
+    btn_shutdown_bg = """<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <gradient
+        android:angle="45"
+        android:startColor="#B71C1C"
+        android:endColor="#FF3D00"
+        android:type="linear" />
+    <corners android:radius="14dp" />
+</shape>"""
+    with open(os.path.join(RES_DIR, "drawable", "btn_shutdown_bg.xml"), "w", encoding="utf-8") as f:
+        f.write(btn_shutdown_bg)
+
+    btn_sleep_bg = """<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <gradient
+        android:angle="45"
+        android:startColor="#4A148C"
+        android:endColor="#7C4DFF"
+        android:type="linear" />
+    <corners android:radius="14dp" />
+</shape>"""
+    with open(os.path.join(RES_DIR, "drawable", "btn_sleep_bg.xml"), "w", encoding="utf-8") as f:
+        f.write(btn_sleep_bg)
+
+    card_bg = """<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#1A1D2B" />
+    <corners android:radius="16dp" />
+    <stroke android:width="1dp" android:color="#2A2F45" />
+</shape>"""
+    with open(os.path.join(RES_DIR, "drawable", "card_bg.xml"), "w", encoding="utf-8") as f:
+        f.write(card_bg)
+
+    btn_small_bg = """<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#262B3F" />
+    <corners android:radius="8dp" />
+    <stroke android:width="1dp" android:color="#3A425F" />
+</shape>"""
+    with open(os.path.join(RES_DIR, "drawable", "btn_small_bg.xml"), "w", encoding="utf-8") as f:
+        f.write(btn_small_bg)
+
+    # 5. activity_main.xml
+    layout = """<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0F111A"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:gravity="center_horizontal"
+        android:padding="20dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="AutoWake &amp; Power PC"
+            android:textSize="24sp"
+            android:textStyle="bold"
+            android:textColor="#FFFFFF"
+            android:layout_marginTop="10dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Управление питанием компьютера"
+            android:textSize="13sp"
+            android:textColor="#8F9CAE"
+            android:layout_marginTop="3dp" />
+
+        <!-- PC Status Banner -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="@drawable/card_bg"
+            android:padding="14dp"
+            android:layout_marginTop="18dp">
+
+            <TextView
+                android:id="@+id/tvPcStatus"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="🔄 Проверка статуса ПК..."
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:textColor="#00E5FF" />
+
+            <Button
+                android:id="@+id/btnCheckStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:text="🔄 Проверить"
+                android:textSize="11sp"
+                android:textColor="#FFFFFF"
+                android:background="@drawable/btn_small_bg"
+                android:paddingLeft="10dp"
+                android:paddingRight="10dp" />
+        </LinearLayout>
+
+        <!-- Main Power Buttons -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/card_bg"
+            android:padding="16dp"
+            android:layout_marginTop="14dp">
+
+            <Button
+                android:id="@+id/btnWake"
+                android:layout_width="match_parent"
+                android:layout_height="56dp"
+                android:background="@drawable/btn_wake_bg"
+                android:text="⚡ ВКЛЮЧИТЬ ПК"
+                android:textSize="17sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="12dp">
+
+                <Button
+                    android:id="@+id/btnShutdown"
+                    android:layout_width="0dp"
+                    android:layout_height="52dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/btn_shutdown_bg"
+                    android:text="🛑 ВЫКЛЮЧИТЬ"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:textColor="#FFFFFF" />
+
+                <View
+                    android:layout_width="10dp"
+                    android:layout_height="match_parent" />
+
+                <Button
+                    android:id="@+id/btnSleep"
+                    android:layout_width="0dp"
+                    android:layout_height="52dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/btn_sleep_bg"
+                    android:text="💤 В СОН"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:textColor="#FFFFFF" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/tvStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center_horizontal"
+                android:text="Готов к отправке команд"
+                android:textSize="13sp"
+                android:textColor="#8F9CAE"
+                android:layout_marginTop="12dp" />
+        </LinearLayout>
+
+        <!-- Network Info Card -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/card_bg"
+            android:padding="14dp"
+            android:layout_marginTop="14dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="📡 Текущая сеть:"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:textColor="#00E5FF" />
+
+            <TextView
+                android:id="@+id/tvNetworkInfo"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Определение сети..."
+                android:textSize="13sp"
+                android:textColor="#FFFFFF"
+                android:layout_marginTop="3dp" />
+        </LinearLayout>
+
+        <!-- Auto-wake Switch Card -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/card_bg"
+            android:padding="14dp"
+            android:layout_marginTop="12dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Авто-включение при Wi-Fi"
+                        android:textSize="15sp"
+                        android:textStyle="bold"
+                        android:textColor="#FFFFFF" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Будить ПК при подключении к домашней сети"
+                        android:textSize="12sp"
+                        android:textColor="#8F9CAE"
+                        android:layout_marginTop="2dp" />
+                </LinearLayout>
+
+                <Switch
+                    android:id="@+id/swAutoWake"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Settings Card -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/card_bg"
+            android:padding="16dp"
+            android:layout_marginTop="12dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Параметры и фильтрация"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF"
+                android:layout_marginBottom="10dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="MAC-адрес ПК"
+                android:textSize="12sp"
+                android:textColor="#8F9CAE" />
+
+            <EditText
+                android:id="@+id/etMac"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="AA:BB:CC:DD:EE:FF"
+                android:textColorHint="#5A6578"
+                android:textColor="#FFFFFF"
+                android:textSize="14sp"
+                android:background="#12141E"
+                android:padding="10dp"
+                android:layout_marginTop="4dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Домашний Wi-Fi (SSID)"
+                android:textSize="12sp"
+                android:textColor="#8F9CAE"
+                android:layout_marginTop="10dp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginTop="4dp">
+
+                <EditText
+                    android:id="@+id/etSsid"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:hint="Имя сети (или пусто для всех)"
+                    android:textColorHint="#5A6578"
+                    android:textColor="#FFFFFF"
+                    android:textSize="14sp"
+                    android:background="#12141E"
+                    android:padding="10dp" />
+
+                <Button
+                    android:id="@+id/btnDetectWifi"
+                    android:layout_width="wrap_content"
+                    android:layout_height="40dp"
+                    android:text="🔍 Текущий"
+                    android:textSize="11sp"
+                    android:textColor="#00E5FF"
+                    android:background="@drawable/btn_small_bg"
+                    android:paddingLeft="10dp"
+                    android:paddingRight="10dp"
+                    android:layout_marginLeft="8dp" />
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="IP адрес ПК (для команд и Broadcast)"
+                android:textSize="12sp"
+                android:textColor="#8F9CAE"
+                android:layout_marginTop="10dp" />
+
+            <EditText
+                android:id="@+id/etIp"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="IP ПК (например: 192.168.0.100)"
+                android:textColorHint="#5A6578"
+                android:textColor="#FFFFFF"
+                android:textSize="14sp"
+                android:background="#12141E"
+                android:padding="10dp"
+                android:layout_marginTop="4dp" />
+
+            <Button
+                android:id="@+id/btnSave"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Сохранить настройки"
+                android:textColor="#FFFFFF"
+                android:background="#262B3F"
+                android:layout_marginTop="16dp" />
+        </LinearLayout>
+
+    </LinearLayout>
+</ScrollView>"""
+    with open(os.path.join(RES_DIR, "layout", "activity_main.xml"), "w", encoding="utf-8") as f:
+        f.write(layout)
+
+    # 6. Java source files
+    wol_helper = """package com.antigravity.wakeonlan;
+
+import android.content.Context;
+import android.net.wifi.WifiInfo;
+import android.net.wifi.WifiManager;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.net.InterfaceAddress;
+import java.net.NetworkInterface;
+import java.util.ArrayList;
+import java.util.Enumeration;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+
+public class WolHelper {
+    public static final String DEFAULT_MAC = "";
+    public static final String DEFAULT_IP = "";
+    public static final int WOL_PORT = 9;
+    public static final int AGENT_PORT = 9876;
+
+    public static List<String> getDynamicBroadcastAddresses() {
+        Set<String> addresses = new LinkedHashSet<>();
+        try {
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            while (interfaces != null && interfaces.hasMoreElements()) {
+                NetworkInterface networkInterface = interfaces.nextElement();
+                if (networkInterface.isLoopback() || !networkInterface.isUp()) {
+                    continue;
+                }
+                for (InterfaceAddress interfaceAddress : networkInterface.getInterfaceAddresses()) {
+                    InetAddress broadcast = interfaceAddress.getBroadcast();
+                    if (broadcast != null && broadcast instanceof Inet4Address) {
+                        String host = broadcast.getHostAddress();
+                        if (host != null && !host.isEmpty()) {
+                            addresses.add(host);
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return new ArrayList<>(addresses);
+    }
+
+    public static String getCurrentWifiSsid(Context context) {
+        try {
+            WifiManager wifiManager = (WifiManager) context.getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            if (wifiManager != null) {
+                WifiInfo info = wifiManager.getConnectionInfo();
+                if (info != null && info.getSSID() != null) {
+                    String ssid = info.getSSID();
+                    if (ssid.startsWith("\\\"") && ssid.endsWith("\\\"") && ssid.length() >= 2) {
+                        ssid = ssid.substring(1, ssid.length() - 1);
+                    }
+                    if (!ssid.equals("<unknown ssid>")) {
+                        return ssid;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return "";
+    }
+
+    public static boolean sendPacket(Context context, String macStr, String manualIp, int port) {
+        try {
+            String cleanMac = macStr.replaceAll("[:\\\\-]", "").trim();
+            if (cleanMac.length() != 12) {
+                return false;
+            }
+            byte[] macBytes = new byte[6];
+            for (int i = 0; i < 6; i++) {
+                macBytes[i] = (byte) Integer.parseInt(cleanMac.substring(i * 2, i * 2 + 2), 16);
+            }
+
+            byte[] bytes = new byte[6 + 16 * 6];
+            for (int i = 0; i < 6; i++) {
+                bytes[i] = (byte) 0xff;
+            }
+            for (int i = 6; i < bytes.length; i += 6) {
+                System.arraycopy(macBytes, 0, bytes, i, 6);
+            }
+
+            Set<String> targets = new LinkedHashSet<>(getDynamicBroadcastAddresses());
+            targets.add("255.255.255.255");
+            if (manualIp != null && !manualIp.trim().isEmpty()) {
+                targets.add(manualIp.trim());
+            }
+
+            boolean anySuccess = false;
+            for (String ip : targets) {
+                try {
+                    InetAddress address = InetAddress.getByName(ip);
+                    DatagramPacket packet = new DatagramPacket(bytes, bytes.length, address, port);
+                    DatagramSocket socket = new DatagramSocket();
+                    socket.setBroadcast(true);
+                    socket.send(packet);
+                    socket.close();
+                    anySuccess = true;
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+            return anySuccess;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return false;
+        }
+    }
+
+    public static boolean sendAgentCommand(String command, String manualIp) {
+        Set<String> targets = new LinkedHashSet<>();
+        if (manualIp != null && !manualIp.trim().isEmpty()) {
+            targets.add(manualIp.trim());
+        }
+        targets.addAll(getDynamicBroadcastAddresses());
+        targets.add("255.255.255.255");
+
+        boolean anySuccess = false;
+        for (String ip : targets) {
+            try {
+                byte[] data = command.getBytes("UTF-8");
+                InetAddress address = InetAddress.getByName(ip);
+                DatagramPacket packet = new DatagramPacket(data, data.length, address, AGENT_PORT);
+                DatagramSocket socket = new DatagramSocket();
+                socket.setBroadcast(true);
+                socket.send(packet);
+                socket.close();
+                anySuccess = true;
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+        return anySuccess;
+    }
+
+    public static boolean checkPcStatus(String manualIp) {
+        Set<String> targets = new LinkedHashSet<>();
+        if (manualIp != null && !manualIp.trim().isEmpty() && !manualIp.endsWith(".255")) {
+            targets.add(manualIp.trim());
+        }
+        targets.addAll(getDynamicBroadcastAddresses());
+
+        for (String ip : targets) {
+            try {
+                DatagramSocket socket = new DatagramSocket();
+                socket.setSoTimeout(1200);
+                byte[] data = "PING".getBytes("UTF-8");
+                InetAddress address = InetAddress.getByName(ip);
+                DatagramPacket packet = new DatagramPacket(data, data.length, address, AGENT_PORT);
+                socket.send(packet);
+
+                byte[] buf = new byte[128];
+                DatagramPacket recv = new DatagramPacket(buf, buf.length);
+                socket.receive(recv);
+                String resp = new String(recv.getData(), 0, recv.getLength()).trim();
+                socket.close();
+                if ("PONG".equals(resp)) {
+                    return true;
+                }
+            } catch (Exception ignored) {}
+        }
+        return false;
+    }
+}
+"""
+    with open(os.path.join(SRC_DIR, "WolHelper.java"), "w", encoding="utf-8") as f:
+        f.write(wol_helper)
+
+    wol_service = """package com.antigravity.wakeonlan;
+
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.app.Service;
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.pm.ServiceInfo;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.net.NetworkRequest;
+import android.os.Build;
+import android.os.IBinder;
+
+public class WolService extends Service {
+    private static final String CHANNEL_ID = "AutoWakeServiceChannel";
+    private ConnectivityManager connectivityManager;
+    private ConnectivityManager.NetworkCallback networkCallback;
+    private long lastWakeTime = 0;
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        try {
+            createNotificationChannel();
+            Notification notification = buildNotification("Служба активна: ждём подключение к Wi-Fi");
+            if (Build.VERSION.SDK_INT >= 34) {
+                startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE);
+            } else {
+                startForeground(1, notification);
+            }
+        } catch (Throwable t) {
+            t.printStackTrace();
+        }
+
+        try {
+            registerNetworkCallback();
+        } catch (Throwable t) {
+            t.printStackTrace();
+        }
+    }
+
+    private void registerNetworkCallback() {
+        connectivityManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (connectivityManager == null) return;
+
+        NetworkRequest request = new NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .build();
+
+        networkCallback = new ConnectivityManager.NetworkCallback() {
+            @Override
+            public void onAvailable(Network network) {
+                long now = System.currentTimeMillis();
+                if (now - lastWakeTime > 30000) {
+                    SharedPreferences prefs = getSharedPreferences("wol_prefs", MODE_PRIVATE);
+                    String targetSsid = prefs.getString("target_ssid", "").trim();
+
+                    if (!targetSsid.isEmpty()) {
+                        String currentSsid = WolHelper.getCurrentWifiSsid(WolService.this);
+                        if (!currentSsid.isEmpty() && !currentSsid.equalsIgnoreCase(targetSsid)) {
+                            updateNotification("Чужой Wi-Fi (" + currentSsid + "): ПК не включаем");
+                            return;
+                        }
+                    }
+
+                    lastWakeTime = now;
+                    triggerWake();
+                }
+            }
+        };
+
+        connectivityManager.registerNetworkCallback(request, networkCallback);
+    }
+
+    private void triggerWake() {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    SharedPreferences prefs = getSharedPreferences("wol_prefs", MODE_PRIVATE);
+                    String mac = prefs.getString("mac", WolHelper.DEFAULT_MAC);
+                    String ip = prefs.getString("ip", "");
+                    
+                    boolean ok = WolHelper.sendPacket(WolService.this, mac, ip, WolHelper.WOL_PORT);
+                    if (ok) {
+                        String currentSsid = WolHelper.getCurrentWifiSsid(WolService.this);
+                        String text = currentSsid.isEmpty() ? 
+                                "Wi-Fi подключен: Сигнал на ПК отправлен!" :
+                                "Домашний Wi-Fi (" + currentSsid + "): ПК включен!";
+                        updateNotification(text);
+                    }
+                } catch (Throwable ignored) {}
+            }
+        }).start();
+    }
+
+    private void updateNotification(String text) {
+        try {
+            NotificationManager manager = getSystemService(NotificationManager.class);
+            if (manager != null) {
+                manager.notify(1, buildNotification(text));
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private Notification buildNotification(String text) {
+        Intent notificationIntent = new Intent(this, MainActivity.class);
+        PendingIntent pendingIntent = PendingIntent.getActivity(
+                this, 0, notificationIntent,
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+
+        Notification.Builder builder;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            builder = new Notification.Builder(this, CHANNEL_ID);
+        } else {
+            builder = new Notification.Builder(this);
+        }
+
+        return builder.setContentTitle("AutoWake PC")
+                .setContentText(text)
+                .setSmallIcon(R.drawable.ic_stat_wol)
+                .setContentIntent(pendingIntent)
+                .build();
+    }
+
+    private void createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel serviceChannel = new NotificationChannel(
+                    CHANNEL_ID,
+                    "AutoWake Service Channel",
+                    NotificationManager.IMPORTANCE_LOW
+            );
+            NotificationManager manager = getSystemService(NotificationManager.class);
+            if (manager != null) {
+                manager.createNotificationChannel(serviceChannel);
+            }
+        }
+    }
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        return START_STICKY;
+    }
+
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        if (connectivityManager != null && networkCallback != null) {
+            try {
+                connectivityManager.unregisterNetworkCallback(networkCallback);
+            } catch (Throwable ignored) {}
+        }
+    }
+
+    @Override
+    public IBinder onBind(Intent intent) {
+        return null;
+    }
+}
+"""
+    with open(os.path.join(SRC_DIR, "WolService.java"), "w", encoding="utf-8") as f:
+        f.write(wol_service)
+
+    boot_receiver = """package com.antigravity.wakeonlan;
+
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.os.Build;
+
+public class BootReceiver extends BroadcastReceiver {
+    @Override
+    public void onReceive(Context context, Intent intent) {
+        if (Intent.ACTION_BOOT_COMPLETED.equals(intent.getAction())) {
+            SharedPreferences prefs = context.getSharedPreferences("wol_prefs", Context.MODE_PRIVATE);
+            boolean autoWake = prefs.getBoolean("auto_wake", false);
+            if (autoWake) {
+                try {
+                    Intent serviceIntent = new Intent(context, WolService.class);
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        context.startForegroundService(serviceIntent);
+                    } else {
+                        context.startService(serviceIntent);
+                    }
+                } catch (Throwable ignored) {}
+            }
+        }
+    }
+}
+"""
+    with open(os.path.join(SRC_DIR, "BootReceiver.java"), "w", encoding="utf-8") as f:
+        f.write(boot_receiver)
+
+    main_activity = """package com.antigravity.wakeonlan;
+
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.DialogInterface;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.View;
+import android.widget.Button;
+import android.widget.CompoundButton;
+import android.widget.EditText;
+import android.widget.Switch;
+import android.widget.TextView;
+import android.widget.Toast;
+import java.util.List;
+
+public class MainActivity extends Activity {
+    private EditText etMac, etSsid, etIp;
+    private TextView tvStatus, tvNetworkInfo, tvPcStatus;
+    private Switch swAutoWake;
+    private SharedPreferences prefs;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+
+        if (Build.VERSION.SDK_INT >= 33) {
+            if (checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 101);
+            }
+        }
+
+        prefs = getSharedPreferences("wol_prefs", MODE_PRIVATE);
+
+        etMac = findViewById(R.id.etMac);
+        etSsid = findViewById(R.id.etSsid);
+        etIp = findViewById(R.id.etIp);
+        tvStatus = findViewById(R.id.tvStatus);
+        tvNetworkInfo = findViewById(R.id.tvNetworkInfo);
+        tvPcStatus = findViewById(R.id.tvPcStatus);
+        swAutoWake = findViewById(R.id.swAutoWake);
+
+        Button btnWake = findViewById(R.id.btnWake);
+        Button btnShutdown = findViewById(R.id.btnShutdown);
+        Button btnSleep = findViewById(R.id.btnSleep);
+        Button btnCheckStatus = findViewById(R.id.btnCheckStatus);
+        Button btnSave = findViewById(R.id.btnSave);
+        Button btnDetectWifi = findViewById(R.id.btnDetectWifi);
+
+        etMac.setText(prefs.getString("mac", WolHelper.DEFAULT_MAC));
+        etSsid.setText(prefs.getString("target_ssid", ""));
+        etIp.setText(prefs.getString("ip", WolHelper.DEFAULT_IP));
+
+        boolean autoWake = prefs.getBoolean("auto_wake", false);
+        swAutoWake.setChecked(autoWake);
+
+        refreshNetworkInfo();
+        checkPcOnline();
+
+        btnWake.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                doWake();
+            }
+        });
+
+        btnShutdown.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                confirmShutdown();
+            }
+        });
+
+        btnSleep.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                confirmSleep();
+            }
+        });
+
+        btnCheckStatus.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                checkPcOnline();
+            }
+        });
+
+        btnDetectWifi.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                detectCurrentWifi();
+            }
+        });
+
+        btnSave.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                saveSettings();
+                refreshNetworkInfo();
+                checkPcOnline();
+                Toast.makeText(MainActivity.this, "Настройки сохранены!", Toast.LENGTH_SHORT).show();
+            }
+        });
+
+        swAutoWake.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+                prefs.edit().putBoolean("auto_wake", isChecked).apply();
+                Intent serviceIntent = new Intent(MainActivity.this, WolService.class);
+                try {
+                    if (isChecked) {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            startForegroundService(serviceIntent);
+                        } else {
+                            startService(serviceIntent);
+                        }
+                        tvStatus.setText("Авто-режим включен (при Wi-Fi)");
+                    } else {
+                        stopService(serviceIntent);
+                        tvStatus.setText("Авто-режим выключен");
+                    }
+                } catch (Throwable t) {
+                    t.printStackTrace();
+                    Toast.makeText(MainActivity.this, "Ошибка службы: " + t.getMessage(), Toast.LENGTH_SHORT).show();
+                }
+            }
+        });
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        refreshNetworkInfo();
+        checkPcOnline();
+    }
+
+    private void checkPcOnline() {
+        tvPcStatus.setText("🔄 Проверка статуса ПК...");
+        final String ip = etIp.getText().toString().trim();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final boolean online = WolHelper.checkPcStatus(ip);
+                new Handler(Looper.getMainLooper()).post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (online) {
+                            tvPcStatus.setText("🟢 ПК включен (в сети)");
+                            tvPcStatus.setTextColor(0xFF00E676);
+                        } else {
+                            tvPcStatus.setText("⚪ ПК выключен (не в сети)");
+                            tvPcStatus.setTextColor(0xFF8F9CAE);
+                        }
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private void refreshNetworkInfo() {
+        String currentSsid = WolHelper.getCurrentWifiSsid(this);
+        List<String> broadcasts = WolHelper.getDynamicBroadcastAddresses();
+
+        StringBuilder sb = new StringBuilder();
+        if (currentSsid.isEmpty()) {
+            sb.append("Wi-Fi: Не подключен / Имя скрыто\\n");
+        } else {
+            sb.append("Wi-Fi: \\"").append(currentSsid).append("\\"\\n");
+        }
+
+        if (broadcasts.isEmpty()) {
+            sb.append("Broadcast: 255.255.255.255 (общий)");
+        } else {
+            sb.append("Broadcast: ");
+            for (int i = 0; i < broadcasts.size(); i++) {
+                if (i > 0) sb.append(", ");
+                sb.append(broadcasts.get(i));
+            }
+            sb.append(" (авто)");
+        }
+
+        tvNetworkInfo.setText(sb.toString());
+    }
+
+    private void detectCurrentWifi() {
+        if (checkSelfPermission("android.permission.ACCESS_FINE_LOCATION") != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{"android.permission.ACCESS_FINE_LOCATION", "android.permission.ACCESS_COARSE_LOCATION"}, 102);
+            return;
+        }
+
+        String ssid = WolHelper.getCurrentWifiSsid(this);
+        if (!ssid.isEmpty()) {
+            etSsid.setText(ssid);
+            refreshNetworkInfo();
+            Toast.makeText(this, "Определена сеть: " + ssid, Toast.LENGTH_SHORT).show();
+        } else {
+            Toast.makeText(this, "Включите геолокацию в шторке или введите имя сети вручную", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == 102) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                detectCurrentWifi();
+            }
+        }
+    }
+
+    private void saveSettings() {
+        String mac = etMac.getText().toString().trim();
+        String ssid = etSsid.getText().toString().trim();
+        String ip = etIp.getText().toString().trim();
+        prefs.edit().putString("mac", mac).putString("target_ssid", ssid).putString("ip", ip).apply();
+    }
+
+    private void doWake() {
+        final String mac = etMac.getText().toString().trim();
+        final String ip = etIp.getText().toString().trim();
+        saveSettings();
+
+        if (mac.isEmpty()) {
+            tvStatus.setText("⚠️ Введите MAC-адрес ПК в настройках");
+            Toast.makeText(MainActivity.this, "Введите MAC-адрес ПК в настройках!", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        tvStatus.setText("Отправка сигнала включения...");
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final boolean success = WolHelper.sendPacket(MainActivity.this, mac, ip, WolHelper.WOL_PORT);
+                new Handler(Looper.getMainLooper()).post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (success) {
+                            tvStatus.setText("⚡ Сигнал включения отправлен!");
+                            Toast.makeText(MainActivity.this, "Сигнал отправлен на ПК!", Toast.LENGTH_SHORT).show();
+                            new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+                                @Override
+                                public void run() {
+                                    checkPcOnline();
+                                }
+                            }, 5000);
+                        } else {
+                            tvStatus.setText("❌ Ошибка отправки пакета");
+                            Toast.makeText(MainActivity.this, "Ошибка! Проверь MAC-адрес", Toast.LENGTH_SHORT).show();
+                        }
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private void confirmShutdown() {
+        new AlertDialog.Builder(this)
+                .setTitle("Выключение ПК")
+                .setMessage("Вы уверены, что хотите завершить работу компьютера?")
+                .setPositiveButton("Да, выключить", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        doShutdown();
+                    }
+                })
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
+    private void doShutdown() {
+        final String ip = etIp.getText().toString().trim();
+        tvStatus.setText("🛑 Отправка команды выключения...");
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final boolean ok = WolHelper.sendAgentCommand("SHUTDOWN", ip);
+                new Handler(Looper.getMainLooper()).post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (ok) {
+                            tvStatus.setText("🛑 Команда выключения отправлена!");
+                            Toast.makeText(MainActivity.this, "Компьютер выключается...", Toast.LENGTH_LONG).show();
+                            new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+                                @Override
+                                public void run() {
+                                    checkPcOnline();
+                                }
+                            }, 3000);
+                        } else {
+                            tvStatus.setText("❌ Ошибка отправки команды");
+                        }
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private void confirmSleep() {
+        new AlertDialog.Builder(this)
+                .setTitle("Спящий режим")
+                .setMessage("Перевести компьютер в спящий режим?")
+                .setPositiveButton("В сон", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        doSleep();
+                    }
+                })
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
+    private void doSleep() {
+        final String ip = etIp.getText().toString().trim();
+        tvStatus.setText("💤 Отправка команды сна...");
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final boolean ok = WolHelper.sendAgentCommand("SLEEP", ip);
+                new Handler(Looper.getMainLooper()).post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (ok) {
+                            tvStatus.setText("💤 ПК отправлен в спящий режим!");
+                            Toast.makeText(MainActivity.this, "ПК переходит в спящий режим...", Toast.LENGTH_SHORT).show();
+                            new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+                                @Override
+                                public void run() {
+                                    checkPcOnline();
+                                }
+                            }, 3000);
+                        } else {
+                            tvStatus.setText("❌ Ошибка отправки команды");
+                        }
+                    }
+                });
+            }
+        }).start();
+    }
+}
+"""
+    with open(os.path.join(SRC_DIR, "MainActivity.java"), "w", encoding="utf-8") as f:
+        f.write(main_activity)
+
+def build_apk():
+    create_project_files()
+
+    compiled_res = os.path.join(PROJ_DIR, "compiled_res.zip")
+    unaligned_apk = os.path.join(PROJ_DIR, "unaligned.apk")
+    aligned_apk = os.path.join(PROJ_DIR, "aligned.apk")
+    final_apk = os.path.abspath("AutoWakePC.apk")
+
+    print("[1] Compiling resources with aapt2...")
+    run([AAPT2, "compile", "--dir", RES_DIR, "-o", compiled_res])
+
+    print("[2] Linking resources with aapt2...")
+    run([
+        AAPT2, "link",
+        "-I", ANDROID_JAR,
+        compiled_res,
+        "--manifest", os.path.join(PROJ_DIR, "AndroidManifest.xml"),
+        "-o", unaligned_apk,
+        "--java", GEN_DIR,
+        "--auto-add-overlay"
+    ])
+
+    print("[3] Compiling Java code with javac...")
+    java_files = []
+    for root, _, files in os.walk(SRC_DIR):
+        for f in files:
+            if f.endswith(".java"):
+                java_files.append(os.path.join(root, f))
+    for root, _, files in os.walk(GEN_DIR):
+        for f in files:
+            if f.endswith(".java"):
+                java_files.append(os.path.join(root, f))
+
+    javac = r"C:\Program Files\Microsoft\jdk-17.0.10.7-hotspot\bin\javac.exe"
+    run([javac, "-encoding", "UTF-8", "-cp", f"{ANDROID_JAR};{GEN_DIR};{SRC_DIR}", "-d", BIN_DIR] + java_files)
+
+    print("[4] Dexing classes with d8...")
+    class_files = []
+    for root, _, files in os.walk(BIN_DIR):
+        for f in files:
+            if f.endswith(".class"):
+                class_files.append(os.path.join(root, f))
+    
+    run([D8, "--release", "--min-api", "26", "--output", PROJ_DIR] + class_files, shell=True)
+
+    print("[5] Packaging classes.dex into unaligned.apk...")
+    import zipfile
+    with zipfile.ZipFile(unaligned_apk, 'a') as zf:
+        zf.write(os.path.join(PROJ_DIR, "classes.dex"), "classes.dex")
+
+    print("[6] Aligning apk with zipalign...")
+    if os.path.exists(aligned_apk):
+        os.remove(aligned_apk)
+    run([ZIPALIGN, "-v", "-p", "4", unaligned_apk, aligned_apk])
+
+    print("[7] Creating debug keystore if not exists...")
+    keystore = os.path.join(PROJ_DIR, "debug.keystore")
+    if not os.path.exists(keystore):
+        keytool = r"C:\Program Files\Microsoft\jdk-17.0.10.7-hotspot\bin\keytool.exe"
+        run([
+            keytool, "-genkeypair", "-v",
+            "-keystore", keystore,
+            "-storepass", "android",
+            "-alias", "androiddebugkey",
+            "-keypass", "android",
+            "-keyalg", "RSA",
+            "-keysize", "2048",
+            "-validity", "10000",
+            "-dname", "CN=Debug,O=Android,C=US"
+        ])
+
+    print("[8] Signing apk with apksigner...")
+    if os.path.exists(final_apk):
+        os.remove(final_apk)
+    shutil.copyfile(aligned_apk, final_apk)
+    run([
+        APKSIGNER, "sign",
+        "--ks", keystore,
+        "--ks-pass", "pass:android",
+        "--ks-key-alias", "androiddebugkey",
+        "--key-pass", "pass:android",
+        final_apk
+    ], shell=True)
+
+    print(f"\n[УСПЕХ!] APK готов: {final_apk} (Размер: {os.path.getsize(final_apk)} байт)")
+
+if __name__ == "__main__":
+    build_apk()
