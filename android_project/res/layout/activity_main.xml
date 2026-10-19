@@ -113,6 +113,36 @@
                     android:textColor="#FFFFFF" />
             </LinearLayout>
 
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="10dp">
+
+                <Button
+                    android:id="@+id/btnTimer"
+                    android:layout_width="0dp"
+                    android:layout_height="50dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/btn_timer_bg"
+                    android:text="⏱️ ВЫКЛЮЧИТЬ ЧЕРЕЗ..."
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:textColor="#FFFFFF" />
+
+                <Button
+                    android:id="@+id/btnCancelTimer"
+                    android:layout_width="wrap_content"
+                    android:layout_height="50dp"
+                    android:background="@drawable/btn_small_bg"
+                    android:text="❌ Отмена"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:textColor="#FF5252"
+                    android:visibility="gone"
+                    android:layout_marginLeft="8dp" />
+            </LinearLayout>
+
             <TextView
                 android:id="@+id/tvStatus"
                 android:layout_width="wrap_content"

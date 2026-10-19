@@ -48,6 +48,23 @@ def run_agent():
                 log("КОМАНДА: Завершение работы Windows через 2 сек...")
                 subprocess.run(["shutdown", "/s", "/t", "2"], shell=True)
 
+            elif cmd.startswith("SHUTDOWN_TIMER:"):
+                try:
+                    sec_str = cmd.split(":")[1].strip()
+                    sec = max(1, int(sec_str))
+                    subprocess.run(["shutdown", "/a"], shell=True, capture_output=True)
+                    subprocess.run(["shutdown", "/s", "/t", str(sec)], shell=True)
+                    sock.sendto(b"OK_TIMER", addr)
+                    mins = sec // 60
+                    log(f"КОМАНДА: Выключение Windows запланировано через {mins} мин ({sec} сек)...")
+                except Exception as e:
+                    log(f"ОШИБКА таймера: {e}")
+
+            elif cmd == "CANCEL_SHUTDOWN":
+                subprocess.run(["shutdown", "/a"], shell=True, capture_output=True)
+                sock.sendto(b"OK_CANCEL", addr)
+                log("КОМАНДА: Запланированное выключение Windows отменено!")
+
             elif cmd == "RESTART":
                 sock.sendto(b"OK_RESTART", addr)
                 log("КОМАНДА: Перезагрузка Windows через 2 сек...")

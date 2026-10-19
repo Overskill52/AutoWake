@@ -5,7 +5,7 @@
   <img src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?style=for-the-badge&logo=windows&logoColor=white" />
   <img src="https://img.shields.io/badge/Python-3.8+-3776AB?style=for-the-badge&logo=python&logoColor=white" />
   <img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" />
-  <a href="https://github.com/Overskill52/AutoWake/releases/latest/download/AutoWakePC.apk"><img src="https://img.shields.io/badge/Download-APK%20(v1.6)-7C4DFF?style=for-the-badge&logo=android&logoColor=white" /></a>
+  <a href="https://github.com/Overskill52/AutoWake/releases/latest/download/AutoWakePC.apk"><img src="https://img.shields.io/badge/Download-APK%20(v1.7)-7C4DFF?style=for-the-badge&logo=android&logoColor=white" /></a>
 </p>
 
 **AutoWake** — это легковесный и функциональный комплекс для удаленного включения, выключения и мониторинга компьютера под управлением Windows прямо со смартфона на Android.
@@ -20,6 +20,7 @@
 * 🏠 **Умная привязка к домашнему Wi-Fi:** Приложение включает ПК автоматически только при подключении к твоей домашней сети. В кафе, на работе или в гостях телефон не будет зря слать сигналы.
 * 🔄 **Авто-вычисление Broadcast IP:** Приложение на лету сканирует сетевой интерфейс и само находит актуальный широковещательный адрес. Даже если роутер перезагрузится или сменит подсеть, сигнал дойдет без ручной перенастройки.
 * 🛑 **Удаленное выключение и сон:** Корректное завершение работы Windows (`shutdown /s /t 2`) или переход в спящий режим прямо с телефона.
+* ⏱️ **Таймер выключения с отменой:** Возможность выключить ПК через 30 минут, 1, 1.5, 2, 3, 4 часа или указать своё точное время в минутах. Отображение времени срабатывания в реальном времени и кнопка быстрой отмены.
 * 🟢 **Мониторинг статуса ПК:** В реальном времени отображает состояние: `🟢 ПК включен (в сети)` или `⚪ ПК выключен`.
 * 🎨 **Material You / Themed Icons (Android 13+):** Адаптивная векторная иконка автоматически окрашивается в цвета обоев рабочего стола.
 * 🪶 **Невесомый агент для Windows:** Потребляет 0% процессора и несколько мегабайт ОЗУ, стартует невидимо вместе с Windows.
@@ -100,7 +101,7 @@ flowchart LR
 ### Шаг 3. Установка и настройка приложения на телефоне
 
 1. **Скачайте APK:**
-   * [Прямая ссылка на APK (v1.6)](https://github.com/Overskill52/AutoWake/releases/latest/download/AutoWakePC.apk) или со страницы [Releases](https://github.com/Overskill52/AutoWake/releases).
+   * [Прямая ссылка на APK (v1.7)](https://github.com/Overskill52/AutoWake/releases/latest/download/AutoWakePC.apk) или со страницы [Releases](https://github.com/Overskill52/AutoWake/releases).
    * Либо запустите на ПК `download_app.bat` и отсканируйте камерой телефона QR-код.
 2. **Настройте приложение:**
    * **MAC-адрес:** введите физический адрес сетевой карты вашего ПК (узнать в Windows: команда `getmac` или `ipconfig /all`).
@@ -115,7 +116,7 @@ flowchart LR
 
 В репозитории содержатся автономные Python-скрипты для диагностики и управления:
 
-* **`pc_agent.py`** — легковесный UDP-сервер на порту `9876`, обрабатывающий команды `PING`, `SHUTDOWN` и `SLEEP`.
+* **`pc_agent.py`** — легковесный UDP-сервер на порту `9876`, обрабатывающий команды `PING`, `SHUTDOWN`, `SHUTDOWN_TIMER`, `CANCEL_SHUTDOWN` и `SLEEP`.
 * **`send_wol.py`** — консольный скрипт отправки Wake-on-LAN пакетов с любого компьютера:
   ```bash
   python send_wol.py 00:11:22:33:44:55 192.168.0.255 9
@@ -133,7 +134,7 @@ flowchart LR
 
 * **Изоляция:** Связь между телефоном и ПК происходит исключительно внутри домашней локальной сети через ваш личный Wi-Fi роутер.
 * **Аппаратный NAT:** Порт агента закрыт от интернета сетевым экраном роутера.
-* **Фиксированный набор команд:** Агент принимает только жестко заданные текстовые команды (`PING`, `SHUTDOWN`, `SLEEP`). Возможность передачи файлов или исполнения стороннего кода полностью исключена архитектурно.
+* **Фиксированный набор команд:** Агент принимает только жестко заданные текстовые команды (`PING`, `SHUTDOWN`, `SHUTDOWN_TIMER`, `CANCEL_SHUTDOWN`, `SLEEP`). Возможность передачи файлов или исполнения стороннего кода полностью исключена архитектурно.
 
 ---
 

@@ -90,8 +90,8 @@ def create_project_files():
     manifest = """<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.antigravity.wakeonlan"
-    android:versionCode="7"
-    android:versionName="1.6">
+    android:versionCode="8"
+    android:versionName="1.7">
 
     <uses-sdk
         android:minSdkVersion="26"
@@ -272,6 +272,19 @@ def create_project_files():
     with open(os.path.join(RES_DIR, "drawable", "btn_sleep_bg.xml"), "w", encoding="utf-8") as f:
         f.write(btn_sleep_bg)
 
+    btn_timer_bg = """<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <gradient
+        android:angle="45"
+        android:startColor="#E65100"
+        android:endColor="#FF9100"
+        android:type="linear" />
+    <corners android:radius="14dp" />
+</shape>"""
+    with open(os.path.join(RES_DIR, "drawable", "btn_timer_bg.xml"), "w", encoding="utf-8") as f:
+        f.write(btn_timer_bg)
+
     card_bg = """<?xml version="1.0" encoding="utf-8"?>
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
@@ -406,6 +419,36 @@ def create_project_files():
                     android:textSize="15sp"
                     android:textStyle="bold"
                     android:textColor="#FFFFFF" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="10dp">
+
+                <Button
+                    android:id="@+id/btnTimer"
+                    android:layout_width="0dp"
+                    android:layout_height="50dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/btn_timer_bg"
+                    android:text="⏱️ ВЫКЛЮЧИТЬ ЧЕРЕЗ..."
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:textColor="#FFFFFF" />
+
+                <Button
+                    android:id="@+id/btnCancelTimer"
+                    android:layout_width="wrap_content"
+                    android:layout_height="50dp"
+                    android:background="@drawable/btn_small_bg"
+                    android:text="❌ Отмена"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:textColor="#FF5252"
+                    android:visibility="gone"
+                    android:layout_marginLeft="8dp" />
             </LinearLayout>
 
             <TextView
@@ -1123,12 +1166,15 @@ import android.widget.EditText;
 import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.List;
+import java.util.Locale;
 
 public class MainActivity extends Activity {
     private EditText etMac, etSsid, etIp;
     private TextView tvStatus, tvNetworkInfo, tvPcStatus, tvLastAutoWake;
-    private Button btnBatteryOpt;
+    private Button btnBatteryOpt, btnTimer, btnCancelTimer;
     private Switch swAutoWake;
     private SharedPreferences prefs;
 
@@ -1153,6 +1199,8 @@ public class MainActivity extends Activity {
         tvPcStatus = findViewById(R.id.tvPcStatus);
         tvLastAutoWake = findViewById(R.id.tvLastAutoWake);
         btnBatteryOpt = findViewById(R.id.btnBatteryOpt);
+        btnTimer = findViewById(R.id.btnTimer);
+        btnCancelTimer = findViewById(R.id.btnCancelTimer);
         swAutoWake = findViewById(R.id.swAutoWake);
 
         Button btnWake = findViewById(R.id.btnWake);
@@ -1171,6 +1219,7 @@ public class MainActivity extends Activity {
 
         refreshNetworkInfo();
         checkPcOnline();
+        updateTimerUi();
 
         btnWake.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -1190,6 +1239,20 @@ public class MainActivity extends Activity {
             @Override
             public void onClick(View v) {
                 confirmSleep();
+            }
+        });
+
+        btnTimer.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showTimerDialog();
+            }
+        });
+
+        btnCancelTimer.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                cancelShutdownTimer();
             }
         });
 
@@ -1493,6 +1556,138 @@ public class MainActivity extends Activity {
                 });
             }
         }).start();
+    }
+
+    private void showTimerDialog() {
+        final String[] options = new String[]{
+            "30 минут",
+            "1 час (60 мин)",
+            "1.5 часа (90 мин)",
+            "2 часа (120 мин)",
+            "3 часа (180 мин)",
+            "4 часа (240 мин)",
+            "✏️ Своё время в минутах..."
+        };
+        final int[] seconds = new int[]{
+            1800,
+            3600,
+            5400,
+            7200,
+            10800,
+            14400,
+            -1
+        };
+
+        new AlertDialog.Builder(this)
+            .setTitle("⏱️ Выключить ПК по таймеру")
+            .setItems(options, new DialogInterface.OnClickListener() {
+                @Override
+                public void onClick(DialogInterface dialog, int which) {
+                    if (seconds[which] == -1) {
+                        showCustomTimerDialog();
+                    } else {
+                        setShutdownTimer(seconds[which], options[which]);
+                    }
+                }
+            })
+            .setNegativeButton("Отмена", null)
+            .show();
+    }
+
+    private void showCustomTimerDialog() {
+        final EditText input = new EditText(this);
+        input.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        input.setHint("Количество минут (например, 45)");
+        input.setTextColor(0xFFFFFFFF);
+        input.setHintTextColor(0xFF5A6578);
+        input.setPadding(40, 30, 40, 30);
+
+        new AlertDialog.Builder(this)
+            .setTitle("⏱️ Укажите время (в минутах)")
+            .setView(input)
+            .setPositiveButton("Запустить таймер", new DialogInterface.OnClickListener() {
+                @Override
+                public void onClick(DialogInterface dialog, int which) {
+                    String val = input.getText().toString().trim();
+                    try {
+                        int mins = Integer.parseInt(val);
+                        if (mins > 0) {
+                            setShutdownTimer(mins * 60, mins + " мин");
+                        } else {
+                            Toast.makeText(MainActivity.this, "Введите число больше 0", Toast.LENGTH_SHORT).show();
+                        }
+                    } catch (Exception e) {
+                        Toast.makeText(MainActivity.this, "Неверный формат числа", Toast.LENGTH_SHORT).show();
+                    }
+                }
+            })
+            .setNegativeButton("Отмена", null)
+            .show();
+    }
+
+    private void setShutdownTimer(final int sec, final String label) {
+        final String ip = etIp.getText().toString().trim();
+        tvStatus.setText("⏱️ Отправка таймера на ПК...");
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final boolean ok = WolHelper.sendAgentCommand("SHUTDOWN_TIMER:" + sec, ip);
+                new Handler(Looper.getMainLooper()).post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (ok) {
+                            long targetTime = System.currentTimeMillis() + (long) sec * 1000;
+                            SimpleDateFormat sdf = new SimpleDateFormat("HH:mm", Locale.getDefault());
+                            String timeStr = sdf.format(new Date(targetTime));
+                            prefs.edit().putLong("active_timer_end", targetTime).putString("active_timer_label", label).apply();
+                            updateTimerUi();
+                            Toast.makeText(MainActivity.this, "⏱️ Таймер запущен: выключение в " + timeStr + " (" + label + ")", Toast.LENGTH_LONG).show();
+                        } else {
+                            tvStatus.setText("❌ Ошибка отправки команды таймера");
+                            Toast.makeText(MainActivity.this, "Не удалось связаться с ПК", Toast.LENGTH_SHORT).show();
+                        }
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private void cancelShutdownTimer() {
+        final String ip = etIp.getText().toString().trim();
+        tvStatus.setText("❌ Отмена таймера на ПК...");
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final boolean ok = WolHelper.sendAgentCommand("CANCEL_SHUTDOWN", ip);
+                new Handler(Looper.getMainLooper()).post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (ok) {
+                            prefs.edit().remove("active_timer_end").remove("active_timer_label").apply();
+                            updateTimerUi();
+                            tvStatus.setText("✅ Таймер выключения отменен!");
+                            Toast.makeText(MainActivity.this, "Таймер выключения отменен", Toast.LENGTH_SHORT).show();
+                        } else {
+                            tvStatus.setText("❌ Не удалось отменить таймер");
+                        }
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private void updateTimerUi() {
+        long timerEnd = prefs.getLong("active_timer_end", 0);
+        if (timerEnd > System.currentTimeMillis()) {
+            SimpleDateFormat sdf = new SimpleDateFormat("HH:mm", Locale.getDefault());
+            String timeStr = sdf.format(new Date(timerEnd));
+            String label = prefs.getString("active_timer_label", "");
+            tvStatus.setText("⏳ Таймер: выключение в " + timeStr + " (" + label + ")");
+            btnCancelTimer.setVisibility(View.VISIBLE);
+        } else {
+            prefs.edit().remove("active_timer_end").remove("active_timer_label").apply();
+            btnCancelTimer.setVisibility(View.GONE);
+        }
     }
 }
 """
