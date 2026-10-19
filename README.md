@@ -30,31 +30,31 @@
 
 ```mermaid
 flowchart LR
-    subgraph Phone [📱 Смартфон (Android)]
-        App[AutoWake App]
-        WifiDetect[Детектор домашнего Wi-Fi]
-        WolSender[WOL & Command Sender]
+    subgraph Phone ["📱 Смартфон (Android)"]
+        App["AutoWake App"]
+        WifiDetect["Детектор домашнего Wi-Fi"]
+        WolSender["WOL & Command Sender"]
     end
 
-    subgraph Router [📡 Домашний роутер]
-        LAN[Локальная сеть / Wi-Fi]
+    subgraph Router ["📡 Домашний роутер"]
+        LAN["Локальная сеть / Wi-Fi"]
     end
 
-    subgraph PC [🖥️ Компьютер (Windows)]
-        NIC[Сетевая карта Realtek/Intel]
-        Agent[PC Agent (UDP 9876)]
-        OS[Windows 10 / 11]
+    subgraph PC ["🖥️ Компьютер (Windows)"]
+        NIC["Сетевая карта Realtek/Intel"]
+        Agent["PC Agent (UDP 9876)"]
+        OS["Windows 10 / 11"]
     end
 
-    App -->|1. Проверка сети| WifiDetect
-    WifiDetect -->|2. Домашний Wi-Fi активен| WolSender
-    WolSender -->|Magic Packet UDP 9| LAN
-    LAN -->|Пробуждение ПК| NIC
-    NIC -->|Старт питания| OS
+    App -->|"1. Проверка сети"| WifiDetect
+    WifiDetect -->|"2. Домашний Wi-Fi активен"| WolSender
+    WolSender -->|"Magic Packet UDP 9"| LAN
+    LAN -->|"Пробуждение ПК"| NIC
+    NIC -->|"Старт питания"| OS
     
-    WolSender -->|Команда SHUTDOWN / PING (UDP 9876)| Agent
-    Agent -->|Ответ PONG (Статус онлайн)| App
-    Agent -->|Выключение системы| OS
+    WolSender -->|"Команда SHUTDOWN / PING"| Agent
+    Agent -->|"Ответ PONG (Онлайн)"| App
+    Agent -->|"Выключение системы"| OS
 ```
 
 ---
