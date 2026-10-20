@@ -33,13 +33,32 @@ public class WolService extends Service {
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
     private boolean isWifiConnected = false;
-    private long lastWakeWorkerTime = 0;
 
     @Override
     public void onCreate() {
         super.onCreate();
         ensureForeground("Авто-включение ПК активно");
+        checkInitialWifiState();
         registerNetworkCallback();
+    }
+
+    private void checkInitialWifiState() {
+        try {
+            ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm != null) {
+                Network activeNet = cm.getActiveNetwork();
+                if (activeNet != null) {
+                    NetworkCapabilities caps = cm.getNetworkCapabilities(activeNet);
+                    if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                        synchronized (this) {
+                            isWifiConnected = true;
+                        }
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            t.printStackTrace();
+        }
     }
 
     private void ensureForeground(String text) {
@@ -93,12 +112,14 @@ public class WolService extends Service {
 
     private synchronized void triggerAutoWake(final Network network) {
         long now = System.currentTimeMillis();
-        // Cooldown between auto-wakes: minimum 15 minutes!
-        if (now - lastWakeWorkerTime < 15 * 60 * 1000) {
+        SharedPreferences prefs = getSharedPreferences("wol_prefs", MODE_PRIVATE);
+
+        // Cooldown between auto-wakes: minimum 15 minutes persisted in prefs!
+        long lastWakeTime = prefs.getLong("last_wake_worker_time", 0);
+        if (now - lastWakeTime < 15 * 60 * 1000) {
             return;
         }
 
-        SharedPreferences prefs = getSharedPreferences("wol_prefs", MODE_PRIVATE);
         if (!prefs.getBoolean("auto_wake", false)) {
             return;
         }
@@ -110,7 +131,7 @@ public class WolService extends Service {
             return;
         }
 
-        lastWakeWorkerTime = now;
+        prefs.edit().putLong("last_wake_worker_time", now).apply();
 
         new Thread(new Runnable() {
             @Override
