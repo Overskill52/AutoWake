@@ -69,6 +69,7 @@ public class MainActivity extends Activity {
 
         boolean autoWake = prefs.getBoolean("auto_wake", false);
         swAutoWake.setChecked(autoWake);
+        startAutoWakeServiceIfNeeded();
 
         refreshNetworkInfo();
         checkPcOnline();
@@ -182,6 +183,7 @@ public class MainActivity extends Activity {
         super.onResume();
         refreshNetworkInfo();
         checkPcOnline();
+        startAutoWakeServiceIfNeeded();
 
         String lastWake = prefs.getString("last_auto_wake", "Пока не зафиксировано");
         tvLastAutoWake.setText("Последний сигнал: " + lastWake);
@@ -204,6 +206,24 @@ public class MainActivity extends Activity {
                 });
             } else {
                 btnBatteryOpt.setVisibility(View.GONE);
+            }
+        }
+    }
+
+    private void startAutoWakeServiceIfNeeded() {
+        if (prefs != null && prefs.getBoolean("auto_wake", false)) {
+            String mac = prefs.getString("mac", "").trim();
+            if (mac.replace(":", "").replace("-", "").length() == 12) {
+                try {
+                    Intent serviceIntent = new Intent(this, WolService.class);
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        startForegroundService(serviceIntent);
+                    } else {
+                        startService(serviceIntent);
+                    }
+                } catch (Throwable t) {
+                    t.printStackTrace();
+                }
             }
         }
     }

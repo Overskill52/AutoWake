@@ -90,8 +90,8 @@ def create_project_files():
     manifest = """<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.antigravity.wakeonlan"
-    android:versionCode="8"
-    android:versionName="1.7">
+    android:versionCode="9"
+    android:versionName="1.8">
 
     <uses-sdk
         android:minSdkVersion="26"
@@ -100,8 +100,10 @@ def create_project_files():
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -129,6 +131,7 @@ def create_project_files():
             android:name=".WolService"
             android:enabled="true"
             android:exported="false"
+            android:stopWithTask="false"
             android:foregroundServiceType="connectedDevice" />
 
         <receiver
@@ -691,6 +694,51 @@ public class WolHelper {
     public static final int WOL_PORT = 9;
     public static final int AGENT_PORT = 9876;
 
+    public static String getSubnetBroadcast(String ipStr) {
+        try {
+            if (ipStr == null || ipStr.trim().isEmpty()) return null;
+            String[] parts = ipStr.trim().split("\\\\.");
+            if (parts.length == 4) {
+                return parts[0] + "." + parts[1] + "." + parts[2] + ".255";
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    public static boolean isSameSubnet(String ip1, String ip2) {
+        try {
+            if (ip1 == null || ip2 == null) return false;
+            String[] p1 = ip1.trim().split("\\\\.");
+            String[] p2 = ip2.trim().split("\\\\.");
+            if (p1.length == 4 && p2.length == 4) {
+                return p1[0].equals(p2[0]) && p1[1].equals(p2[1]) && p1[2].equals(p2[2]);
+            }
+        } catch (Exception ignored) {}
+        return false;
+    }
+
+    public static List<String> getDeviceIpv4Addresses() {
+        List<String> list = new ArrayList<>();
+        try {
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            while (interfaces != null && interfaces.hasMoreElements()) {
+                NetworkInterface ni = interfaces.nextElement();
+                if (ni.isLoopback() || !ni.isUp()) continue;
+                Enumeration<InetAddress> addrs = ni.getInetAddresses();
+                while (addrs.hasMoreElements()) {
+                    InetAddress addr = addrs.nextElement();
+                    if (addr instanceof Inet4Address && !addr.isLoopbackAddress()) {
+                        String host = addr.getHostAddress();
+                        if (host != null && !host.isEmpty()) {
+                            list.add(host);
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+        return list;
+    }
+
     public static List<String> getDynamicBroadcastAddresses() {
         Set<String> addresses = new LinkedHashSet<>();
         try {
@@ -761,7 +809,18 @@ public class WolHelper {
                 System.arraycopy(macBytes, 0, bytes, i, 6);
             }
 
-            Set<String> targets = new LinkedHashSet<>(getDynamicBroadcastAddresses());
+            Set<String> targets = new LinkedHashSet<>();
+            String calcBroadcast = getSubnetBroadcast(manualIp);
+            if (calcBroadcast != null) {
+                targets.add(calcBroadcast);
+            }
+            for (String devIp : getDeviceIpv4Addresses()) {
+                String devBc = getSubnetBroadcast(devIp);
+                if (devBc != null) {
+                    targets.add(devBc);
+                }
+            }
+            targets.addAll(getDynamicBroadcastAddresses());
             targets.add("255.255.255.255");
             if (manualIp != null && !manualIp.trim().isEmpty()) {
                 targets.add(manualIp.trim());
@@ -776,13 +835,15 @@ public class WolHelper {
                 }
             } catch (Throwable ignored) {}
 
+            int[] ports = (port == 9) ? new int[]{9, 7} : new int[]{port};
             boolean anySuccess = false;
+
             try {
-                for (int attempt = 0; attempt < 3; attempt++) {
+                for (int p : ports) {
                     for (String ip : targets) {
                         try {
                             InetAddress address = InetAddress.getByName(ip);
-                            DatagramPacket packet = new DatagramPacket(bytes, bytes.length, address, port);
+                            DatagramPacket packet = new DatagramPacket(bytes, bytes.length, address, p);
                             
                             if (network != null) {
                                 try {
@@ -800,12 +861,7 @@ public class WolHelper {
                             socket.send(packet);
                             socket.close();
                             anySuccess = true;
-                        } catch (Exception e) {
-                            e.printStackTrace();
-                        }
-                    }
-                    if (attempt < 2) {
-                        try { Thread.sleep(200); } catch (InterruptedException ignored) {}
+                        } catch (Exception ignored) {}
                     }
                 }
             } finally {
@@ -886,13 +942,16 @@ public class WolHelper {
 
     wol_service = """package com.antigravity.wakeonlan;
 
+import android.app.AlarmManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.ServiceInfo;
 import android.net.ConnectivityManager;
@@ -901,36 +960,40 @@ import android.net.NetworkCapabilities;
 import android.net.NetworkRequest;
 import android.net.TransportInfo;
 import android.net.wifi.WifiInfo;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
+import android.os.SystemClock;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
 
 public class WolService extends Service {
     private static final String CHANNEL_ID = "AutoWakeServiceChannel";
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
-    private long lastWakeTime = 0;
+    private BroadcastReceiver wifiReceiver;
+    private long lastWakeWorkerTime = 0;
 
     @Override
     public void onCreate() {
         super.onCreate();
+        ensureForeground("Служба активна: ждём подключение к Wi-Fi");
+        registerNetworkCallback();
+        registerWifiReceiver();
+    }
+
+    private void ensureForeground(String text) {
         try {
             createNotificationChannel();
-            Notification notification = buildNotification("Служба активна: ждём подключение к Wi-Fi");
+            Notification notification = buildNotification(text);
             if (Build.VERSION.SDK_INT >= 34) {
                 startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE);
             } else {
                 startForeground(1, notification);
             }
-        } catch (Throwable t) {
-            t.printStackTrace();
-        }
-
-        try {
-            registerNetworkCallback();
         } catch (Throwable t) {
             t.printStackTrace();
         }
@@ -947,35 +1010,75 @@ public class WolService extends Service {
         networkCallback = new ConnectivityManager.NetworkCallback() {
             @Override
             public void onAvailable(final Network network) {
-                handleNetworkAvailable(network);
+                triggerAutoWake(network, "onAvailable");
+            }
+
+            @Override
+            public void onLinkPropertiesChanged(final Network network, final android.net.LinkProperties lp) {
+                triggerAutoWake(network, "onLinkPropertiesChanged");
+            }
+
+            @Override
+            public void onCapabilitiesChanged(final Network network, final NetworkCapabilities nc) {
+                triggerAutoWake(network, "onCapabilitiesChanged");
             }
         };
 
-        connectivityManager.registerNetworkCallback(request, networkCallback);
+        try {
+            connectivityManager.registerNetworkCallback(request, networkCallback);
+        } catch (Throwable t) {
+            t.printStackTrace();
+        }
     }
 
-    private void handleNetworkAvailable(final Network network) {
+    private void registerWifiReceiver() {
+        try {
+            wifiReceiver = new BroadcastReceiver() {
+                @Override
+                public void onReceive(Context context, Intent intent) {
+                    triggerAutoWake(null, "BroadcastReceiver");
+                }
+            };
+            IntentFilter filter = new IntentFilter();
+            filter.addAction("android.net.wifi.STATE_CHANGE");
+            filter.addAction("android.net.conn.CONNECTIVITY_CHANGE");
+            registerReceiver(wifiReceiver, filter);
+        } catch (Throwable t) {
+            t.printStackTrace();
+        }
+    }
+
+    private synchronized void triggerAutoWake(final Network network, final String source) {
         long now = System.currentTimeMillis();
-        if (now - lastWakeTime < 10000) {
+        // Debounce: don't start multiple parallel workers within 8 seconds
+        if (now - lastWakeWorkerTime < 8000) {
             return;
         }
-        lastWakeTime = now;
+        lastWakeWorkerTime = now;
 
         new Thread(new Runnable() {
             @Override
             public void run() {
                 PowerManager.WakeLock wl = null;
+                WifiManager.WifiLock wifiLock = null;
                 try {
                     PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
                     if (pm != null) {
                         wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AutoWake:ServiceWakeLock");
-                        wl.acquire(15000);
+                        wl.acquire(25000);
                     }
 
-                    // Settle time for DHCP and routing
-                    try { Thread.sleep(600); } catch (InterruptedException ignored) {}
+                    WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+                    if (wm != null) {
+                        wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "AutoWake:ServiceWifiLock");
+                        wifiLock.acquire();
+                    }
 
                     SharedPreferences prefs = getSharedPreferences("wol_prefs", MODE_PRIVATE);
+                    if (!prefs.getBoolean("auto_wake", false)) {
+                        return;
+                    }
+
                     String targetSsid = prefs.getString("target_ssid", "").trim();
                     String mac = prefs.getString("mac", "").trim();
                     String ip = prefs.getString("ip", "").trim();
@@ -987,37 +1090,69 @@ public class WolService extends Service {
                         return;
                     }
 
-                    String currentSsid = detectSsid(network);
-                    if (!targetSsid.isEmpty()) {
-                        if (!currentSsid.isEmpty() && !currentSsid.equalsIgnoreCase(targetSsid)) {
-                            String msg = "Чужой Wi-Fi (" + currentSsid + "): ПК не включаем";
-                            updateNotification(msg);
-                            prefs.edit().putString("last_auto_wake", getTime() + " — " + msg).apply();
-                            return;
+                    // Multi-wave transmission over 10 seconds to allow DHCP to settle
+                    int[] delays = new int[]{800, 1500, 2000, 2500, 3000};
+                    boolean anySent = false;
+                    String finalMatchedLabel = "Wi-Fi";
+
+                    for (int step = 0; step < delays.length; step++) {
+                        try { Thread.sleep(delays[step]); } catch (InterruptedException ignored) {}
+
+                        String currentSsid = detectSsid(network);
+                        if (!targetSsid.isEmpty()) {
+                            if (!currentSsid.isEmpty()) {
+                                boolean matchesSsid = currentSsid.equalsIgnoreCase(targetSsid)
+                                        || currentSsid.equalsIgnoreCase(targetSsid + "_5G")
+                                        || currentSsid.equalsIgnoreCase(targetSsid + "_2.4G")
+                                        || currentSsid.contains(targetSsid);
+                                if (!matchesSsid) {
+                                    String msg = "Чужой Wi-Fi (" + currentSsid + "): ПК не включаем";
+                                    updateNotification(msg);
+                                    prefs.edit().putString("last_auto_wake", getTime() + " — " + msg).apply();
+                                    return;
+                                }
+                                finalMatchedLabel = currentSsid;
+                            } else {
+                                // Background location blocked SSID reading: check subnet IP
+                                List<String> devIps = WolHelper.getDeviceIpv4Addresses();
+                                boolean sameSubnet = false;
+                                for (String dIp : devIps) {
+                                    if (WolHelper.isSameSubnet(dIp, ip)) {
+                                        sameSubnet = true;
+                                        break;
+                                    }
+                                }
+                                if (!sameSubnet && !ip.isEmpty() && step < delays.length - 1) {
+                                    continue;
+                                }
+                                finalMatchedLabel = "Домашний Wi-Fi";
+                            }
+                        } else {
+                            if (!currentSsid.isEmpty()) finalMatchedLabel = currentSsid;
+                        }
+
+                        updateNotification("⚡ Wi-Fi: отправка сигнала (" + (step + 1) + "/5)...");
+                        boolean ok = WolHelper.sendPacket(WolService.this, network, mac, ip, WolHelper.WOL_PORT);
+                        if (ok) {
+                            anySent = true;
                         }
                     }
 
-                    updateNotification("⚡ Wi-Fi подключен: отправка сигнала на ПК...");
-
-                    boolean ok = WolHelper.sendPacket(WolService.this, network, mac, ip, WolHelper.WOL_PORT);
-
-                    try { Thread.sleep(1200); } catch (InterruptedException ignored) {}
-                    WolHelper.sendPacket(WolService.this, network, mac, ip, WolHelper.WOL_PORT);
-
-                    String netLabel = currentSsid.isEmpty() ? "Wi-Fi" : currentSsid;
                     String statusText;
-                    if (ok) {
-                        statusText = "⚡ ПК включен (" + netLabel + ") в " + getTime();
+                    if (anySent) {
+                        statusText = "⚡ ПК включен (" + finalMatchedLabel + ") в " + getTime();
                     } else {
                         statusText = "⚠️ Сбой отправки сигнала на " + mac;
                     }
-
                     updateNotification(statusText);
                     prefs.edit().putString("last_auto_wake", statusText).apply();
 
                 } catch (Throwable t) {
                     t.printStackTrace();
                 } finally {
+                    if (wifiLock != null && wifiLock.isHeld()) {
+                        try { wifiLock.release(); } catch (Throwable ignored) {}
+                    }
                     if (wl != null && wl.isHeld()) {
                         try { wl.release(); } catch (Throwable ignored) {}
                     }
@@ -1073,6 +1208,7 @@ public class WolService extends Service {
                 .setContentText(text)
                 .setSmallIcon(R.drawable.ic_stat_wol)
                 .setContentIntent(pendingIntent)
+                .setOngoing(true)
                 .build();
     }
 
@@ -1092,7 +1228,29 @@ public class WolService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        ensureForeground("Служба активна: ждём подключение к Wi-Fi");
         return START_STICKY;
+    }
+
+    @Override
+    public void onTaskRemoved(Intent rootIntent) {
+        super.onTaskRemoved(rootIntent);
+        SharedPreferences prefs = getSharedPreferences("wol_prefs", MODE_PRIVATE);
+        if (prefs.getBoolean("auto_wake", false)) {
+            Intent restartIntent = new Intent(getApplicationContext(), WolService.class);
+            PendingIntent restartPendingIntent = PendingIntent.getService(
+                    getApplicationContext(), 1, restartIntent,
+                    PendingIntent.FLAG_ONE_SHOT | PendingIntent.FLAG_IMMUTABLE
+            );
+            AlarmManager alarmService = (AlarmManager) getApplicationContext().getSystemService(Context.ALARM_SERVICE);
+            if (alarmService != null) {
+                alarmService.set(
+                        AlarmManager.ELAPSED_REALTIME,
+                        SystemClock.elapsedRealtime() + 1000,
+                        restartPendingIntent
+                );
+            }
+        }
     }
 
     @Override
@@ -1101,6 +1259,11 @@ public class WolService extends Service {
         if (connectivityManager != null && networkCallback != null) {
             try {
                 connectivityManager.unregisterNetworkCallback(networkCallback);
+            } catch (Throwable ignored) {}
+        }
+        if (wifiReceiver != null) {
+            try {
+                unregisterReceiver(wifiReceiver);
             } catch (Throwable ignored) {}
         }
     }
@@ -1216,6 +1379,7 @@ public class MainActivity extends Activity {
 
         boolean autoWake = prefs.getBoolean("auto_wake", false);
         swAutoWake.setChecked(autoWake);
+        startAutoWakeServiceIfNeeded();
 
         refreshNetworkInfo();
         checkPcOnline();
@@ -1329,6 +1493,7 @@ public class MainActivity extends Activity {
         super.onResume();
         refreshNetworkInfo();
         checkPcOnline();
+        startAutoWakeServiceIfNeeded();
 
         String lastWake = prefs.getString("last_auto_wake", "Пока не зафиксировано");
         tvLastAutoWake.setText("Последний сигнал: " + lastWake);
@@ -1351,6 +1516,24 @@ public class MainActivity extends Activity {
                 });
             } else {
                 btnBatteryOpt.setVisibility(View.GONE);
+            }
+        }
+    }
+
+    private void startAutoWakeServiceIfNeeded() {
+        if (prefs != null && prefs.getBoolean("auto_wake", false)) {
+            String mac = prefs.getString("mac", "").trim();
+            if (mac.replace(":", "").replace("-", "").length() == 12) {
+                try {
+                    Intent serviceIntent = new Intent(this, WolService.class);
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        startForegroundService(serviceIntent);
+                    } else {
+                        startService(serviceIntent);
+                    }
+                } catch (Throwable t) {
+                    t.printStackTrace();
+                }
             }
         }
     }

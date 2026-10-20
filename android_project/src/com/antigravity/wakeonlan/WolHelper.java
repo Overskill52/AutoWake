@@ -22,6 +22,51 @@ public class WolHelper {
     public static final int WOL_PORT = 9;
     public static final int AGENT_PORT = 9876;
 
+    public static String getSubnetBroadcast(String ipStr) {
+        try {
+            if (ipStr == null || ipStr.trim().isEmpty()) return null;
+            String[] parts = ipStr.trim().split("\\.");
+            if (parts.length == 4) {
+                return parts[0] + "." + parts[1] + "." + parts[2] + ".255";
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    public static boolean isSameSubnet(String ip1, String ip2) {
+        try {
+            if (ip1 == null || ip2 == null) return false;
+            String[] p1 = ip1.trim().split("\\.");
+            String[] p2 = ip2.trim().split("\\.");
+            if (p1.length == 4 && p2.length == 4) {
+                return p1[0].equals(p2[0]) && p1[1].equals(p2[1]) && p1[2].equals(p2[2]);
+            }
+        } catch (Exception ignored) {}
+        return false;
+    }
+
+    public static List<String> getDeviceIpv4Addresses() {
+        List<String> list = new ArrayList<>();
+        try {
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            while (interfaces != null && interfaces.hasMoreElements()) {
+                NetworkInterface ni = interfaces.nextElement();
+                if (ni.isLoopback() || !ni.isUp()) continue;
+                Enumeration<InetAddress> addrs = ni.getInetAddresses();
+                while (addrs.hasMoreElements()) {
+                    InetAddress addr = addrs.nextElement();
+                    if (addr instanceof Inet4Address && !addr.isLoopbackAddress()) {
+                        String host = addr.getHostAddress();
+                        if (host != null && !host.isEmpty()) {
+                            list.add(host);
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+        return list;
+    }
+
     public static List<String> getDynamicBroadcastAddresses() {
         Set<String> addresses = new LinkedHashSet<>();
         try {
@@ -92,7 +137,18 @@ public class WolHelper {
                 System.arraycopy(macBytes, 0, bytes, i, 6);
             }
 
-            Set<String> targets = new LinkedHashSet<>(getDynamicBroadcastAddresses());
+            Set<String> targets = new LinkedHashSet<>();
+            String calcBroadcast = getSubnetBroadcast(manualIp);
+            if (calcBroadcast != null) {
+                targets.add(calcBroadcast);
+            }
+            for (String devIp : getDeviceIpv4Addresses()) {
+                String devBc = getSubnetBroadcast(devIp);
+                if (devBc != null) {
+                    targets.add(devBc);
+                }
+            }
+            targets.addAll(getDynamicBroadcastAddresses());
             targets.add("255.255.255.255");
             if (manualIp != null && !manualIp.trim().isEmpty()) {
                 targets.add(manualIp.trim());
@@ -107,13 +163,15 @@ public class WolHelper {
                 }
             } catch (Throwable ignored) {}
 
+            int[] ports = (port == 9) ? new int[]{9, 7} : new int[]{port};
             boolean anySuccess = false;
+
             try {
-                for (int attempt = 0; attempt < 3; attempt++) {
+                for (int p : ports) {
                     for (String ip : targets) {
                         try {
                             InetAddress address = InetAddress.getByName(ip);
-                            DatagramPacket packet = new DatagramPacket(bytes, bytes.length, address, port);
+                            DatagramPacket packet = new DatagramPacket(bytes, bytes.length, address, p);
                             
                             if (network != null) {
                                 try {
@@ -131,12 +189,7 @@ public class WolHelper {
                             socket.send(packet);
                             socket.close();
                             anySuccess = true;
-                        } catch (Exception e) {
-                            e.printStackTrace();
-                        }
-                    }
-                    if (attempt < 2) {
-                        try { Thread.sleep(200); } catch (InterruptedException ignored) {}
+                        } catch (Exception ignored) {}
                     }
                 }
             } finally {
