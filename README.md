@@ -5,7 +5,7 @@
   <img src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?style=for-the-badge&logo=windows&logoColor=white" />
   <img src="https://img.shields.io/badge/Python-3.8+-3776AB?style=for-the-badge&logo=python&logoColor=white" />
   <img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" />
-  <a href="https://github.com/Overskill52/AutoWake/releases/latest/download/AutoWakePC.apk"><img src="https://img.shields.io/badge/Download-APK%20(v1.8)-7C4DFF?style=for-the-badge&logo=android&logoColor=white" /></a>
+  <a href="https://github.com/Overskill52/AutoWake/releases/latest/download/AutoWakePC.apk"><img src="https://img.shields.io/badge/Download-APK%20(v1.9)-7C4DFF?style=for-the-badge&logo=android&logoColor=white" /></a>
 </p>
 
 **AutoWake** — это легковесный и функциональный комплекс для удаленного включения, выключения и мониторинга компьютера под управлением Windows прямо со смартфона на Android.
@@ -101,7 +101,7 @@ flowchart LR
 ### Шаг 3. Установка и настройка приложения на телефоне
 
 1. **Скачайте APK:**
-   * [Прямая ссылка на APK (v1.8)](https://github.com/Overskill52/AutoWake/releases/latest/download/AutoWakePC.apk) или со страницы [Releases](https://github.com/Overskill52/AutoWake/releases).
+   * [Прямая ссылка на APK (v1.9)](https://github.com/Overskill52/AutoWake/releases/latest/download/AutoWakePC.apk) или со страницы [Releases](https://github.com/Overskill52/AutoWake/releases).
    * Либо запустите на ПК `download_app.bat` и отсканируйте камерой телефона QR-код.
 2. **Настройте приложение:**
    * **MAC-адрес:** введите физический адрес сетевой карты вашего ПК (узнать в Windows: команда `getmac` или `ipconfig /all`).

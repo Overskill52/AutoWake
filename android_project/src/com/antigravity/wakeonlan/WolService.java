@@ -38,7 +38,7 @@ public class WolService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
-        ensureForeground("Служба активна: ждём подключение к Wi-Fi");
+        ensureForeground("Авто-включение ПК активно");
         registerNetworkCallback();
         registerWifiReceiver();
     }
@@ -143,7 +143,6 @@ public class WolService extends Service {
 
                     if (mac.isEmpty()) {
                         String err = "⚠️ Ошибка: укажите MAC-адрес ПК в AutoWake!";
-                        updateNotification(err);
                         prefs.edit().putString("last_auto_wake", getTime() + " — " + err).apply();
                         return;
                     }
@@ -165,7 +164,6 @@ public class WolService extends Service {
                                         || currentSsid.contains(targetSsid);
                                 if (!matchesSsid) {
                                     String msg = "Чужой Wi-Fi (" + currentSsid + "): ПК не включаем";
-                                    updateNotification(msg);
                                     prefs.edit().putString("last_auto_wake", getTime() + " — " + msg).apply();
                                     return;
                                 }
@@ -189,7 +187,6 @@ public class WolService extends Service {
                             if (!currentSsid.isEmpty()) finalMatchedLabel = currentSsid;
                         }
 
-                        updateNotification("⚡ Wi-Fi: отправка сигнала (" + (step + 1) + "/5)...");
                         boolean ok = WolHelper.sendPacket(WolService.this, network, mac, ip, WolHelper.WOL_PORT);
                         if (ok) {
                             anySent = true;
@@ -202,7 +199,6 @@ public class WolService extends Service {
                     } else {
                         statusText = "⚠️ Сбой отправки сигнала на " + mac;
                     }
-                    updateNotification(statusText);
                     prefs.edit().putString("last_auto_wake", statusText).apply();
 
                 } catch (Throwable t) {
@@ -240,15 +236,6 @@ public class WolService extends Service {
         return new SimpleDateFormat("HH:mm", Locale.getDefault()).format(new Date());
     }
 
-    private void updateNotification(String text) {
-        try {
-            NotificationManager manager = getSystemService(NotificationManager.class);
-            if (manager != null) {
-                manager.notify(1, buildNotification(text));
-            }
-        } catch (Throwable ignored) {}
-    }
-
     private Notification buildNotification(String text) {
         Intent notificationIntent = new Intent(this, MainActivity.class);
         PendingIntent pendingIntent = PendingIntent.getActivity(
@@ -260,9 +247,10 @@ public class WolService extends Service {
             builder = new Notification.Builder(this, CHANNEL_ID);
         } else {
             builder = new Notification.Builder(this);
+            builder.setPriority(Notification.PRIORITY_MIN);
         }
 
-        return builder.setContentTitle("AutoWake PC")
+        return builder.setContentTitle("AutoWake")
                 .setContentText(text)
                 .setSmallIcon(R.drawable.ic_stat_wol)
                 .setContentIntent(pendingIntent)
@@ -274,9 +262,14 @@ public class WolService extends Service {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel serviceChannel = new NotificationChannel(
                     CHANNEL_ID,
-                    "AutoWake Service Channel",
-                    NotificationManager.IMPORTANCE_LOW
+                    "Фоновая служба",
+                    NotificationManager.IMPORTANCE_MIN
             );
+            serviceChannel.setDescription("Служба авто-включения ПК в фоне");
+            serviceChannel.setShowBadge(false);
+            serviceChannel.enableLights(false);
+            serviceChannel.enableVibration(false);
+            serviceChannel.setSound(null, null);
             NotificationManager manager = getSystemService(NotificationManager.class);
             if (manager != null) {
                 manager.createNotificationChannel(serviceChannel);
@@ -286,7 +279,7 @@ public class WolService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        ensureForeground("Служба активна: ждём подключение к Wi-Fi");
+        ensureForeground("Авто-включение ПК активно");
         return START_STICKY;
     }
 

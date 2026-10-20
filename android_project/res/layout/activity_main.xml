@@ -244,6 +244,16 @@
                 android:textColor="#FFFFFF"
                 android:visibility="gone"
                 android:layout_marginTop="8dp" />
+
+            <Button
+                android:id="@+id/btnHideNotification"
+                android:layout_width="match_parent"
+                android:layout_height="38dp"
+                android:background="@drawable/btn_small_bg"
+                android:text="🔕 Скрыть уведомление службы из шторки"
+                android:textSize="11sp"
+                android:textColor="#8F9CAE"
+                android:layout_marginTop="6dp" />
         </LinearLayout>
 
         <!-- Settings Card -->

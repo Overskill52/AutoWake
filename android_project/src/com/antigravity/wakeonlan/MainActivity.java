@@ -62,6 +62,25 @@ public class MainActivity extends Activity {
         Button btnCheckStatus = findViewById(R.id.btnCheckStatus);
         Button btnSave = findViewById(R.id.btnSave);
         Button btnDetectWifi = findViewById(R.id.btnDetectWifi);
+        Button btnHideNotification = findViewById(R.id.btnHideNotification);
+
+        btnHideNotification.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                try {
+                    Intent intent = new Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS);
+                    intent.putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, getPackageName());
+                    intent.putExtra(android.provider.Settings.EXTRA_CHANNEL_ID, "AutoWakeServiceChannel");
+                    startActivity(intent);
+                } catch (Throwable t) {
+                    try {
+                        Intent intent = new Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS);
+                        intent.putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, getPackageName());
+                        startActivity(intent);
+                    } catch (Throwable ignored) {}
+                }
+            }
+        });
 
         etMac.setText(prefs.getString("mac", WolHelper.DEFAULT_MAC));
         etSsid.setText(prefs.getString("target_ssid", ""));
