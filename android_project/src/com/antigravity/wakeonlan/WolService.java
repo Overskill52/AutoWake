@@ -32,7 +32,7 @@ public class WolService extends Service {
     private static final String CHANNEL_ID = "AutoWakeServiceChannel";
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
-    private BroadcastReceiver wifiReceiver;
+    private boolean isWifiConnected = false;
     private long lastWakeWorkerTime = 0;
 
     @Override
@@ -40,7 +40,6 @@ public class WolService extends Service {
         super.onCreate();
         ensureForeground("Авто-включение ПК активно");
         registerNetworkCallback();
-        registerWifiReceiver();
     }
 
     private void ensureForeground(String text) {
@@ -68,17 +67,20 @@ public class WolService extends Service {
         networkCallback = new ConnectivityManager.NetworkCallback() {
             @Override
             public void onAvailable(final Network network) {
-                triggerAutoWake(network, "onAvailable");
+                synchronized (WolService.this) {
+                    if (isWifiConnected) {
+                        return;
+                    }
+                    isWifiConnected = true;
+                }
+                triggerAutoWake(network);
             }
 
             @Override
-            public void onLinkPropertiesChanged(final Network network, final android.net.LinkProperties lp) {
-                triggerAutoWake(network, "onLinkPropertiesChanged");
-            }
-
-            @Override
-            public void onCapabilitiesChanged(final Network network, final NetworkCapabilities nc) {
-                triggerAutoWake(network, "onCapabilitiesChanged");
+            public void onLost(final Network network) {
+                synchronized (WolService.this) {
+                    isWifiConnected = false;
+                }
             }
         };
 
@@ -89,29 +91,25 @@ public class WolService extends Service {
         }
     }
 
-    private void registerWifiReceiver() {
-        try {
-            wifiReceiver = new BroadcastReceiver() {
-                @Override
-                public void onReceive(Context context, Intent intent) {
-                    triggerAutoWake(null, "BroadcastReceiver");
-                }
-            };
-            IntentFilter filter = new IntentFilter();
-            filter.addAction("android.net.wifi.STATE_CHANGE");
-            filter.addAction("android.net.conn.CONNECTIVITY_CHANGE");
-            registerReceiver(wifiReceiver, filter);
-        } catch (Throwable t) {
-            t.printStackTrace();
-        }
-    }
-
-    private synchronized void triggerAutoWake(final Network network, final String source) {
+    private synchronized void triggerAutoWake(final Network network) {
         long now = System.currentTimeMillis();
-        // Debounce: don't start multiple parallel workers within 8 seconds
-        if (now - lastWakeWorkerTime < 8000) {
+        // Cooldown between auto-wakes: minimum 15 minutes!
+        if (now - lastWakeWorkerTime < 15 * 60 * 1000) {
             return;
         }
+
+        SharedPreferences prefs = getSharedPreferences("wol_prefs", MODE_PRIVATE);
+        if (!prefs.getBoolean("auto_wake", false)) {
+            return;
+        }
+
+        // Check if user recently shut down the PC (within last 30 minutes)
+        long userShutdownTime = prefs.getLong("user_shutdown_time", 0);
+        if (now - userShutdownTime < 30 * 60 * 1000) {
+            prefs.edit().putString("last_auto_wake", getTime() + " — ПК недавно выключен, авто-включение на паузе").apply();
+            return;
+        }
+
         lastWakeWorkerTime = now;
 
         new Thread(new Runnable() {
@@ -123,7 +121,7 @@ public class WolService extends Service {
                     PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
                     if (pm != null) {
                         wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AutoWake:ServiceWakeLock");
-                        wl.acquire(25000);
+                        wl.acquire(15000);
                     }
 
                     WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
@@ -133,22 +131,16 @@ public class WolService extends Service {
                     }
 
                     SharedPreferences prefs = getSharedPreferences("wol_prefs", MODE_PRIVATE);
-                    if (!prefs.getBoolean("auto_wake", false)) {
-                        return;
-                    }
-
                     String targetSsid = prefs.getString("target_ssid", "").trim();
                     String mac = prefs.getString("mac", "").trim();
                     String ip = prefs.getString("ip", "").trim();
 
                     if (mac.isEmpty()) {
-                        String err = "⚠️ Ошибка: укажите MAC-адрес ПК в AutoWake!";
-                        prefs.edit().putString("last_auto_wake", getTime() + " — " + err).apply();
+                        prefs.edit().putString("last_auto_wake", getTime() + " — ⚠️ Укажите MAC-адрес ПК!").apply();
                         return;
                     }
 
-                    // Multi-wave transmission over 10 seconds to allow DHCP to settle
-                    int[] delays = new int[]{800, 1500, 2000, 2500, 3000};
+                    int[] delays = new int[]{1500, 2500, 3000};
                     boolean anySent = false;
                     String finalMatchedLabel = "Wi-Fi";
 
@@ -163,13 +155,11 @@ public class WolService extends Service {
                                         || currentSsid.equalsIgnoreCase(targetSsid + "_2.4G")
                                         || currentSsid.contains(targetSsid);
                                 if (!matchesSsid) {
-                                    String msg = "Чужой Wi-Fi (" + currentSsid + "): ПК не включаем";
-                                    prefs.edit().putString("last_auto_wake", getTime() + " — " + msg).apply();
+                                    prefs.edit().putString("last_auto_wake", getTime() + " — Чужой Wi-Fi (" + currentSsid + ")").apply();
                                     return;
                                 }
                                 finalMatchedLabel = currentSsid;
                             } else {
-                                // Background location blocked SSID reading: check subnet IP
                                 List<String> devIps = WolHelper.getDeviceIpv4Addresses();
                                 boolean sameSubnet = false;
                                 for (String dIp : devIps) {
@@ -181,23 +171,21 @@ public class WolService extends Service {
                                 if (!sameSubnet && !ip.isEmpty() && step < delays.length - 1) {
                                     continue;
                                 }
-                                finalMatchedLabel = "Домашний Wi-Fi";
+                                finalMatchedLabel = "Домашняя сеть";
                             }
                         } else {
                             if (!currentSsid.isEmpty()) finalMatchedLabel = currentSsid;
                         }
 
                         boolean ok = WolHelper.sendPacket(WolService.this, network, mac, ip, WolHelper.WOL_PORT);
-                        if (ok) {
-                            anySent = true;
-                        }
+                        if (ok) anySent = true;
                     }
 
                     String statusText;
                     if (anySent) {
                         statusText = "⚡ ПК включен (" + finalMatchedLabel + ") в " + getTime();
                     } else {
-                        statusText = "⚠️ Сбой отправки сигнала на " + mac;
+                        statusText = "⚠️ Сбой отправки на " + mac;
                     }
                     prefs.edit().putString("last_auto_wake", statusText).apply();
 
@@ -310,11 +298,6 @@ public class WolService extends Service {
         if (connectivityManager != null && networkCallback != null) {
             try {
                 connectivityManager.unregisterNetworkCallback(networkCallback);
-            } catch (Throwable ignored) {}
-        }
-        if (wifiReceiver != null) {
-            try {
-                unregisterReceiver(wifiReceiver);
             } catch (Throwable ignored) {}
         }
     }

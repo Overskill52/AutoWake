@@ -332,6 +332,7 @@ public class MainActivity extends Activity {
         final String mac = etMac.getText().toString().trim();
         final String ip = etIp.getText().toString().trim();
         saveSettings();
+        prefs.edit().remove("user_shutdown_time").apply();
 
         if (mac.isEmpty()) {
             tvStatus.setText("⚠️ Введите MAC-адрес ПК в настройках");
@@ -382,6 +383,7 @@ public class MainActivity extends Activity {
 
     private void doShutdown() {
         final String ip = etIp.getText().toString().trim();
+        prefs.edit().putLong("user_shutdown_time", System.currentTimeMillis()).apply();
         tvStatus.setText("🛑 Отправка команды выключения...");
         new Thread(new Runnable() {
             @Override
@@ -424,6 +426,7 @@ public class MainActivity extends Activity {
 
     private void doSleep() {
         final String ip = etIp.getText().toString().trim();
+        prefs.edit().putLong("user_shutdown_time", System.currentTimeMillis()).apply();
         tvStatus.setText("💤 Отправка команды сна...");
         new Thread(new Runnable() {
             @Override
@@ -531,7 +534,10 @@ public class MainActivity extends Activity {
                             long targetTime = System.currentTimeMillis() + (long) sec * 1000;
                             SimpleDateFormat sdf = new SimpleDateFormat("HH:mm", Locale.getDefault());
                             String timeStr = sdf.format(new Date(targetTime));
-                            prefs.edit().putLong("active_timer_end", targetTime).putString("active_timer_label", label).apply();
+                            prefs.edit().putLong("active_timer_end", targetTime)
+                                    .putString("active_timer_label", label)
+                                    .putLong("user_shutdown_time", targetTime)
+                                    .apply();
                             updateTimerUi();
                             Toast.makeText(MainActivity.this, "⏱️ Таймер запущен: выключение в " + timeStr + " (" + label + ")", Toast.LENGTH_LONG).show();
                         } else {
@@ -555,7 +561,10 @@ public class MainActivity extends Activity {
                     @Override
                     public void run() {
                         if (ok) {
-                            prefs.edit().remove("active_timer_end").remove("active_timer_label").apply();
+                            prefs.edit().remove("active_timer_end")
+                                    .remove("active_timer_label")
+                                    .remove("user_shutdown_time")
+                                    .apply();
                             updateTimerUi();
                             tvStatus.setText("✅ Таймер выключения отменен!");
                             Toast.makeText(MainActivity.this, "Таймер выключения отменен", Toast.LENGTH_SHORT).show();
